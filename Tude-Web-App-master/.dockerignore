@@ -1,0 +1,26 @@
+# Dependencies
+**/node_modules
+
+# Build outputs
+**/dist
+**/.expo
+
+# Local uploads
+artifacts/api-server/local-uploads
+
+# Env files
+**/.env
+**/.env.*
+!**/.env.example
+
+# Editor
+.DS_Store
+**/.vscode
+**/.idea
+
+# Git
+.git
+
+# IMPORTANT: include frontend
+!artifacts/
+!artifacts/etude-plus/

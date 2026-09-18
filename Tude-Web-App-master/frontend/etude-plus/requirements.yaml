@@ -1,0 +1,23 @@
+packages:
+  "framer-motion": "For premium page transitions, staggered reveals, and micro-interactions"
+  "recharts": "For beautiful analytics charts on Professor and Admin dashboards"
+  "date-fns": "For human-readable date and time formatting across class schedules"
+  "clsx": "Utility for constructing className strings conditionally"
+  "tailwind-merge": "Utility to merge tailwind classes without style conflicts"
+
+images:
+  - path: "artifacts/etude-plus/public/images/hero-abstract.png"
+    description: "Abstract, elegant 3D composition with floating geometric shapes, a subtle sigma (Σ) and pi (π) symbol in soft golden yellow, coral, and light blue tones on a clean white background. Premium, academic, modern."
+    aspect_ratio: "16:9"
+  - path: "artifacts/etude-plus/public/images/logo-mark.png"
+    description: "Minimalist, premium logo mark for an education platform. A stylized combination of a book and a plus symbol, in golden yellow and dark navy. Transparent background."
+    aspect_ratio: "1:1"
+  - path: "artifacts/etude-plus/public/images/empty-classes.png"
+    description: "A beautiful, soft 3D illustration of an empty desk with a floating glowing lightbulb, soft shadows, light blue and yellow accents. Used for empty states."
+    aspect_ratio: "4:3"
+
+notes:
+  - The app uses a fallback mock authentication layer if the API endpoints are not yet fully wired to a database, allowing the UI to be fully explored.
+  - All icons use lucide-react.
+  - Wouter is used for routing.
+  - API hooks are imported from @workspace/api-client-react.

@@ -1,0 +1,1708 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: Étude+ API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: auth
+    description: Authentication
+  - name: users
+    description: User management
+  - name: professors
+    description: Professor management
+  - name: classes
+    description: Class management
+  - name: sessions
+    description: Live session management
+  - name: enrollments
+    description: Enrollment management
+  - name: materials
+    description: Class materials
+  - name: quizzes
+    description: Quizzes
+  - name: tests
+    description: Tests
+  - name: assignments
+    description: Assignments
+  - name: grades
+    description: Grades
+  - name: notifications
+    description: Notifications
+  - name: transactions
+    description: Payment transactions
+  - name: reviews
+    description: Reviews and ratings
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /auth/me:
+    get:
+      operationId: getMe
+      tags: [auth]
+      summary: Get current user
+      responses:
+        "200":
+          description: Current user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+        "401":
+          description: Unauthorized
+
+  /auth/login:
+    post:
+      operationId: login
+      tags: [auth]
+      summary: Login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+
+  /auth/register:
+    post:
+      operationId: register
+      tags: [auth]
+      summary: Register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "200":
+          description: Registration successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthResponse"
+
+  /auth/logout:
+    post:
+      operationId: logout
+      tags: [auth]
+      summary: Logout
+      responses:
+        "200":
+          description: Logged out
+
+  /users:
+    get:
+      operationId: listUsers
+      tags: [users]
+      summary: List users
+      parameters:
+        - name: role
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: number
+        - name: limit
+          in: query
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Users list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsersListResponse"
+
+  /users/{id}:
+    get:
+      operationId: getUser
+      tags: [users]
+      summary: Get user
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: User
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+    put:
+      operationId: updateUser
+      tags: [users]
+      summary: Update user
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateUserRequest"
+      responses:
+        "200":
+          description: Updated user
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/User"
+
+  /professors:
+    get:
+      operationId: listProfessors
+      tags: [professors]
+      summary: List professors
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+        - name: subject
+          in: query
+          schema:
+            type: string
+        - name: city
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: number
+        - name: limit
+          in: query
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Professors list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfessorsListResponse"
+
+  /professors/{id}:
+    get:
+      operationId: getProfessor
+      tags: [professors]
+      summary: Get professor profile
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Professor
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Professor"
+
+  /professors/{id}/approve:
+    post:
+      operationId: approveProfessor
+      tags: [professors]
+      summary: Approve professor
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Professor approved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Professor"
+
+  /professors/{id}/reject:
+    post:
+      operationId: rejectProfessor
+      tags: [professors]
+      summary: Reject professor
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Professor rejected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Professor"
+
+  /classes:
+    get:
+      operationId: listClasses
+      tags: [classes]
+      summary: List classes
+      parameters:
+        - name: subject
+          in: query
+          schema:
+            type: string
+        - name: gradeLevel
+          in: query
+          schema:
+            type: string
+        - name: city
+          in: query
+          schema:
+            type: string
+        - name: professorId
+          in: query
+          schema:
+            type: number
+        - name: minPrice
+          in: query
+          schema:
+            type: number
+        - name: maxPrice
+          in: query
+          schema:
+            type: number
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: page
+          in: query
+          schema:
+            type: number
+        - name: limit
+          in: query
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Classes list
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ClassesListResponse"
+    post:
+      operationId: createClass
+      tags: [classes]
+      summary: Create class
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateClassRequest"
+      responses:
+        "200":
+          description: Created class
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Class"
+
+  /classes/{id}:
+    get:
+      operationId: getClass
+      tags: [classes]
+      summary: Get class
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Class
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Class"
+    put:
+      operationId: updateClass
+      tags: [classes]
+      summary: Update class
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateClassRequest"
+      responses:
+        "200":
+          description: Updated class
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Class"
+    delete:
+      operationId: deleteClass
+      tags: [classes]
+      summary: Delete class
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Deleted
+
+  /classes/{id}/sessions:
+    get:
+      operationId: listClassSessions
+      tags: [sessions]
+      summary: List class sessions
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LiveSession"
+    post:
+      operationId: createClassSession
+      tags: [sessions]
+      summary: Create live session
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSessionRequest"
+      responses:
+        "200":
+          description: Created session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveSession"
+
+  /classes/{classId}/sessions/{sessionId}:
+    put:
+      operationId: updateClassSession
+      tags: [sessions]
+      summary: Update live session
+      parameters:
+        - name: classId
+          in: path
+          required: true
+          schema:
+            type: number
+        - name: sessionId
+          in: path
+          required: true
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateSessionRequest"
+      responses:
+        "200":
+          description: Updated session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LiveSession"
+
+  /classes/{id}/enrollments:
+    get:
+      operationId: listClassEnrollments
+      tags: [enrollments]
+      summary: List class enrollments
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Enrollments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Enrollment"
+
+  /classes/{id}/materials:
+    get:
+      operationId: listClassMaterials
+      tags: [materials]
+      summary: List class materials
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Materials
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Material"
+    post:
+      operationId: createMaterial
+      tags: [materials]
+      summary: Create material
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateMaterialRequest"
+      responses:
+        "200":
+          description: Created material
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Material"
+
+  /classes/{id}/quizzes:
+    get:
+      operationId: listClassQuizzes
+      tags: [quizzes]
+      summary: List class quizzes
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Quizzes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Quiz"
+    post:
+      operationId: createQuiz
+      tags: [quizzes]
+      summary: Create quiz
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateQuizRequest"
+      responses:
+        "200":
+          description: Created quiz
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Quiz"
+
+  /classes/{id}/tests:
+    get:
+      operationId: listClassTests
+      tags: [tests]
+      summary: List class tests
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Tests
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Test"
+    post:
+      operationId: createTest
+      tags: [tests]
+      summary: Create test
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTestRequest"
+      responses:
+        "200":
+          description: Created test
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Test"
+
+  /classes/{id}/assignments:
+    get:
+      operationId: listClassAssignments
+      tags: [assignments]
+      summary: List class assignments
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Assignments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Assignment"
+    post:
+      operationId: createAssignment
+      tags: [assignments]
+      summary: Create assignment
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateAssignmentRequest"
+      responses:
+        "200":
+          description: Created assignment
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Assignment"
+
+  /enrollments:
+    post:
+      operationId: enroll
+      tags: [enrollments]
+      summary: Enroll in class
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrollRequest"
+      responses:
+        "200":
+          description: Enrolled
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Enrollment"
+
+  /enrollments/my:
+    get:
+      operationId: getMyEnrollments
+      tags: [enrollments]
+      summary: Get my enrollments
+      responses:
+        "200":
+          description: My enrollments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Enrollment"
+
+  /grades/my:
+    get:
+      operationId: getMyGrades
+      tags: [grades]
+      summary: Get my grades
+      responses:
+        "200":
+          description: My grades
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Grade"
+
+  /notifications/my:
+    get:
+      operationId: getMyNotifications
+      tags: [notifications]
+      summary: Get my notifications
+      responses:
+        "200":
+          description: My notifications
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Notification"
+
+  /notifications/{id}/read:
+    post:
+      operationId: markNotificationRead
+      tags: [notifications]
+      summary: Mark notification as read
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Notification marked as read
+
+  /transactions/my:
+    get:
+      operationId: getMyTransactions
+      tags: [transactions]
+      summary: Get my transactions
+      responses:
+        "200":
+          description: My transactions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Transaction"
+
+  /transactions:
+    get:
+      operationId: listTransactions
+      tags: [transactions]
+      summary: List all transactions (admin)
+      parameters:
+        - name: page
+          in: query
+          schema:
+            type: number
+        - name: limit
+          in: query
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Transactions
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TransactionsListResponse"
+
+  /payments/checkout:
+    post:
+      operationId: checkout
+      tags: [transactions]
+      summary: Checkout payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CheckoutRequest"
+      responses:
+        "200":
+          description: Checkout initiated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CheckoutResponse"
+
+  /payments/confirm:
+    post:
+      operationId: confirmPayment
+      tags: [transactions]
+      summary: Confirm payment
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ConfirmPaymentRequest"
+      responses:
+        "200":
+          description: Payment confirmed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Transaction"
+
+  /reviews:
+    get:
+      operationId: listReviews
+      tags: [reviews]
+      summary: List reviews for professor
+      parameters:
+        - name: professorId
+          in: query
+          schema:
+            type: number
+        - name: classId
+          in: query
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Reviews
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Review"
+    post:
+      operationId: createReview
+      tags: [reviews]
+      summary: Create review
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReviewRequest"
+      responses:
+        "200":
+          description: Created review
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Review"
+
+  /stats/overview:
+    get:
+      operationId: getOverviewStats
+      tags: [users]
+      summary: Get platform overview stats
+      responses:
+        "200":
+          description: Stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OverviewStats"
+
+  /stats/professor/{id}:
+    get:
+      operationId: getProfessorStats
+      tags: [professors]
+      summary: Get professor stats
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: number
+      responses:
+        "200":
+          description: Professor stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ProfessorStats"
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required: [status]
+
+    User:
+      type: object
+      properties:
+        id:
+          type: number
+        email:
+          type: string
+        role:
+          type: string
+          enum: [student, professor, admin]
+        fullName:
+          type: string
+        profilePhoto:
+          type: string
+          nullable: true
+        city:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+        studentProfile:
+          $ref: "#/components/schemas/StudentProfile"
+          nullable: true
+        professorProfile:
+          $ref: "#/components/schemas/Professor"
+          nullable: true
+      required: [id, email, role, fullName, createdAt]
+
+    StudentProfile:
+      type: object
+      properties:
+        id:
+          type: number
+        userId:
+          type: number
+        gradeLevel:
+          type: string
+          nullable: true
+        schoolName:
+          type: string
+          nullable: true
+        preferredSubjects:
+          type: array
+          items:
+            type: string
+        parentContact:
+          type: string
+          nullable: true
+      required: [id, userId, preferredSubjects]
+
+    Professor:
+      type: object
+      properties:
+        id:
+          type: number
+        userId:
+          type: number
+        fullName:
+          type: string
+        profilePhoto:
+          type: string
+          nullable: true
+        city:
+          type: string
+          nullable: true
+        subjects:
+          type: array
+          items:
+            type: string
+        gradeLevels:
+          type: array
+          items:
+            type: string
+        yearsOfExperience:
+          type: number
+          nullable: true
+        bio:
+          type: string
+          nullable: true
+        qualifications:
+          type: string
+          nullable: true
+        status:
+          type: string
+          enum: [pending, approved, rejected]
+        rating:
+          type: number
+          nullable: true
+        totalReviews:
+          type: number
+        totalStudents:
+          type: number
+        isVerified:
+          type: boolean
+        createdAt:
+          type: string
+      required: [id, userId, fullName, subjects, gradeLevels, status, totalReviews, totalStudents, isVerified, createdAt]
+
+    Class:
+      type: object
+      properties:
+        id:
+          type: number
+        professorId:
+          type: number
+        title:
+          type: string
+        subject:
+          type: string
+        gradeLevel:
+          type: string
+        city:
+          type: string
+        description:
+          type: string
+        coverImage:
+          type: string
+          nullable: true
+        price:
+          type: number
+        durationHours:
+          type: number
+        isRecurring:
+          type: boolean
+        isPublished:
+          type: boolean
+        enrolledCount:
+          type: number
+        professor:
+          $ref: "#/components/schemas/Professor"
+          nullable: true
+        nextSession:
+          $ref: "#/components/schemas/LiveSession"
+          nullable: true
+        createdAt:
+          type: string
+      required: [id, professorId, title, subject, gradeLevel, city, description, price, durationHours, isRecurring, isPublished, enrolledCount, createdAt]
+
+    LiveSession:
+      type: object
+      properties:
+        id:
+          type: number
+        classId:
+          type: number
+        title:
+          type: string
+        description:
+          type: string
+        price:
+          type: number
+        durationHours:
+          type: number
+        scheduledAt:
+          type: string
+        status:
+          type: string
+          enum: [scheduled, live, ended]
+        enrolledCount:
+          type: number
+        createdAt:
+          type: string
+      required: [id, classId, title, description, price, durationHours, scheduledAt, status, enrolledCount, createdAt]
+
+    Material:
+      type: object
+      properties:
+        id:
+          type: number
+        classId:
+          type: number
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        fileUrl:
+          type: string
+          nullable: true
+        fileType:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+      required: [id, classId, title, createdAt]
+
+    Quiz:
+      type: object
+      properties:
+        id:
+          type: number
+        classId:
+          type: number
+        title:
+          type: string
+        dueDate:
+          type: string
+          nullable: true
+        isPublished:
+          type: boolean
+        questions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Question"
+        createdAt:
+          type: string
+      required: [id, classId, title, isPublished, questions, createdAt]
+
+    Test:
+      type: object
+      properties:
+        id:
+          type: number
+        classId:
+          type: number
+        title:
+          type: string
+        dueDate:
+          type: string
+          nullable: true
+        isPublished:
+          type: boolean
+        questions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Question"
+        createdAt:
+          type: string
+      required: [id, classId, title, isPublished, questions, createdAt]
+
+    Assignment:
+      type: object
+      properties:
+        id:
+          type: number
+        classId:
+          type: number
+        title:
+          type: string
+        instructions:
+          type: string
+          nullable: true
+        dueDate:
+          type: string
+          nullable: true
+        isPublished:
+          type: boolean
+        createdAt:
+          type: string
+      required: [id, classId, title, isPublished, createdAt]
+
+    Question:
+      type: object
+      properties:
+        id:
+          type: number
+        text:
+          type: string
+        type:
+          type: string
+          enum: [multiple_choice, short_answer, numeric, long_answer]
+        options:
+          type: array
+          items:
+            type: string
+          nullable: true
+        correctAnswer:
+          type: string
+          nullable: true
+        points:
+          type: number
+      required: [id, text, type, points]
+
+    Enrollment:
+      type: object
+      properties:
+        id:
+          type: number
+        studentId:
+          type: number
+        classId:
+          type: number
+        sessionId:
+          type: number
+          nullable: true
+        status:
+          type: string
+          enum: [pending, paid, active, completed]
+        paidAt:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+        class:
+          $ref: "#/components/schemas/Class"
+          nullable: true
+        student:
+          $ref: "#/components/schemas/User"
+          nullable: true
+      required: [id, studentId, classId, status, createdAt]
+
+    Grade:
+      type: object
+      properties:
+        id:
+          type: number
+        studentId:
+          type: number
+        classId:
+          type: number
+        assessmentType:
+          type: string
+          enum: [quiz, test, assignment]
+        assessmentId:
+          type: number
+        assessmentTitle:
+          type: string
+        score:
+          type: number
+        maxScore:
+          type: number
+        comment:
+          type: string
+          nullable: true
+        gradedAt:
+          type: string
+        class:
+          $ref: "#/components/schemas/Class"
+          nullable: true
+      required: [id, studentId, classId, assessmentType, assessmentId, assessmentTitle, score, maxScore, gradedAt]
+
+    Notification:
+      type: object
+      properties:
+        id:
+          type: number
+        userId:
+          type: number
+        title:
+          type: string
+        message:
+          type: string
+        type:
+          type: string
+          enum: [info, success, warning, reminder]
+        isRead:
+          type: boolean
+        createdAt:
+          type: string
+      required: [id, userId, title, message, type, isRead, createdAt]
+
+    Transaction:
+      type: object
+      properties:
+        id:
+          type: number
+        studentId:
+          type: number
+        classId:
+          type: number
+        sessionId:
+          type: number
+          nullable: true
+        amount:
+          type: number
+        platformFee:
+          type: number
+        professorAmount:
+          type: number
+        status:
+          type: string
+          enum: [pending, completed, failed, refunded]
+        createdAt:
+          type: string
+        class:
+          $ref: "#/components/schemas/Class"
+          nullable: true
+        student:
+          $ref: "#/components/schemas/User"
+          nullable: true
+      required: [id, studentId, classId, amount, platformFee, professorAmount, status, createdAt]
+
+    Review:
+      type: object
+      properties:
+        id:
+          type: number
+        studentId:
+          type: number
+        professorId:
+          type: number
+        classId:
+          type: number
+          nullable: true
+        rating:
+          type: number
+        comment:
+          type: string
+          nullable: true
+        createdAt:
+          type: string
+        student:
+          $ref: "#/components/schemas/User"
+          nullable: true
+      required: [id, studentId, professorId, rating, createdAt]
+
+    OverviewStats:
+      type: object
+      properties:
+        totalStudents:
+          type: number
+        totalProfessors:
+          type: number
+        totalClasses:
+          type: number
+        totalRevenue:
+          type: number
+        pendingProfessors:
+          type: number
+        activeSessionsToday:
+          type: number
+      required: [totalStudents, totalProfessors, totalClasses, totalRevenue, pendingProfessors, activeSessionsToday]
+
+    ProfessorStats:
+      type: object
+      properties:
+        totalEarnings:
+          type: number
+        platformFees:
+          type: number
+        totalStudents:
+          type: number
+        totalClasses:
+          type: number
+        pendingGrading:
+          type: number
+        averageRating:
+          type: number
+          nullable: true
+        earningsByMonth:
+          type: array
+          items:
+            $ref: "#/components/schemas/MonthlyEarning"
+      required: [totalEarnings, platformFees, totalStudents, totalClasses, pendingGrading, earningsByMonth]
+
+    MonthlyEarning:
+      type: object
+      properties:
+        month:
+          type: string
+        amount:
+          type: number
+      required: [month, amount]
+
+    LoginRequest:
+      type: object
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+      required: [email, password]
+
+    RegisterRequest:
+      type: object
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+        role:
+          type: string
+          enum: [student, professor]
+        fullName:
+          type: string
+        city:
+          type: string
+          nullable: true
+      required: [email, password, role, fullName]
+
+    AuthResponse:
+      type: object
+      properties:
+        user:
+          $ref: "#/components/schemas/User"
+        token:
+          type: string
+      required: [user, token]
+
+    UpdateUserRequest:
+      type: object
+      properties:
+        fullName:
+          type: string
+        city:
+          type: string
+        profilePhoto:
+          type: string
+        gradeLevel:
+          type: string
+        schoolName:
+          type: string
+        preferredSubjects:
+          type: array
+          items:
+            type: string
+        subjects:
+          type: array
+          items:
+            type: string
+        gradeLevels:
+          type: array
+          items:
+            type: string
+        yearsOfExperience:
+          type: number
+        bio:
+          type: string
+        qualifications:
+          type: string
+
+    CreateClassRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        subject:
+          type: string
+        gradeLevel:
+          type: string
+        city:
+          type: string
+        description:
+          type: string
+        coverImage:
+          type: string
+          nullable: true
+        price:
+          type: number
+        durationHours:
+          type: number
+        isRecurring:
+          type: boolean
+      required: [title, subject, gradeLevel, city, description, price, durationHours, isRecurring]
+
+    UpdateClassRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        subject:
+          type: string
+        gradeLevel:
+          type: string
+        city:
+          type: string
+        description:
+          type: string
+        coverImage:
+          type: string
+          nullable: true
+        price:
+          type: number
+        durationHours:
+          type: number
+        isRecurring:
+          type: boolean
+        isPublished:
+          type: boolean
+
+    CreateSessionRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        price:
+          type: number
+        durationHours:
+          type: number
+        scheduledAt:
+          type: string
+      required: [title, description, price, durationHours, scheduledAt]
+
+    UpdateSessionRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+        price:
+          type: number
+        durationHours:
+          type: number
+        scheduledAt:
+          type: string
+        status:
+          type: string
+          enum: [scheduled, live, ended]
+
+    CreateMaterialRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        description:
+          type: string
+          nullable: true
+        fileUrl:
+          type: string
+          nullable: true
+        fileType:
+          type: string
+          nullable: true
+      required: [title]
+
+    CreateQuizRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        dueDate:
+          type: string
+          nullable: true
+        questions:
+          type: array
+          items:
+            $ref: "#/components/schemas/CreateQuestionRequest"
+      required: [title, questions]
+
+    CreateTestRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        dueDate:
+          type: string
+          nullable: true
+        questions:
+          type: array
+          items:
+            $ref: "#/components/schemas/CreateQuestionRequest"
+      required: [title, questions]
+
+    CreateAssignmentRequest:
+      type: object
+      properties:
+        title:
+          type: string
+        instructions:
+          type: string
+          nullable: true
+        dueDate:
+          type: string
+          nullable: true
+      required: [title]
+
+    CreateQuestionRequest:
+      type: object
+      properties:
+        text:
+          type: string
+        type:
+          type: string
+          enum: [multiple_choice, short_answer, numeric, long_answer]
+        options:
+          type: array
+          items:
+            type: string
+          nullable: true
+        correctAnswer:
+          type: string
+          nullable: true
+        points:
+          type: number
+      required: [text, type, points]
+
+    EnrollRequest:
+      type: object
+      properties:
+        classId:
+          type: number
+        sessionId:
+          type: number
+          nullable: true
+      required: [classId]
+
+    CheckoutRequest:
+      type: object
+      properties:
+        classId:
+          type: number
+        sessionId:
+          type: number
+          nullable: true
+      required: [classId]
+
+    ConfirmPaymentRequest:
+      type: object
+      properties:
+        transactionId:
+          type: number
+        cardNumber:
+          type: string
+        cardHolder:
+          type: string
+        expiryDate:
+          type: string
+        cvv:
+          type: string
+      required: [transactionId, cardNumber, cardHolder, expiryDate, cvv]
+
+    CheckoutResponse:
+      type: object
+      properties:
+        transactionId:
+          type: number
+        amount:
+          type: number
+        platformFee:
+          type: number
+        professorAmount:
+          type: number
+        classTitle:
+          type: string
+        professorName:
+          type: string
+      required: [transactionId, amount, platformFee, professorAmount, classTitle, professorName]
+
+    CreateReviewRequest:
+      type: object
+      properties:
+        professorId:
+          type: number
+        classId:
+          type: number
+          nullable: true
+        rating:
+          type: number
+        comment:
+          type: string
+          nullable: true
+      required: [professorId, rating]
+
+    UsersListResponse:
+      type: object
+      properties:
+        users:
+          type: array
+          items:
+            $ref: "#/components/schemas/User"
+        total:
+          type: number
+        page:
+          type: number
+        limit:
+          type: number
+      required: [users, total, page, limit]
+
+    ProfessorsListResponse:
+      type: object
+      properties:
+        professors:
+          type: array
+          items:
+            $ref: "#/components/schemas/Professor"
+        total:
+          type: number
+        page:
+          type: number
+        limit:
+          type: number
+      required: [professors, total, page, limit]
+
+    ClassesListResponse:
+      type: object
+      properties:
+        classes:
+          type: array
+          items:
+            $ref: "#/components/schemas/Class"
+        total:
+          type: number
+        page:
+          type: number
+        limit:
+          type: number
+      required: [classes, total, page, limit]
+
+    TransactionsListResponse:
+      type: object
+      properties:
+        transactions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Transaction"
+        total:
+          type: number
+        page:
+          type: number
+        limit:
+          type: number
+      required: [transactions, total, page, limit]

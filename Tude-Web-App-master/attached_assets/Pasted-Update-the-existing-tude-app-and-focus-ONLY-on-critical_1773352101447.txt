@@ -1,0 +1,259 @@
+Update the existing Étude+ app and focus ONLY on critical functionality and working navigation.
+
+IMPORTANT:
+Do not waste effort on flashy visuals or unnecessary features.
+Priority is functionality, completeness, and stable routing.
+Every button, sidebar item, tab, and action must work.
+There must be NO 404 pages, NO dead links, and NO missing core views.
+
+MAIN GOAL
+The app already exists, but important professor and admin pages are missing.
+Fix the app so the core education workflow works end-to-end.
+
+TOP PRIORITIES
+1. Every button must work
+2. Every route must exist
+3. Professor must be able to create and manage classes
+4. Professor must have spaces to add materials, tests, quizzes, and assignments
+5. Professor must have a place to start a live session
+6. Admin must be able to see KYC data from KYCblox, including uploaded documents and verification status
+7. Student must be able to open class pages and access the content they paid for
+
+DO NOT focus on extra animations, fancy graphics, or decorative details unless necessary.
+Keep the design clean and simple but professional.
+
+ROLES
+There are 3 roles:
+- Student
+- Professor
+- Admin
+
+CORE ENGINEERING REQUIREMENTS
+- Audit all current routes and fix broken ones
+- Remove all 404 errors
+- Ensure every sidebar/tab/button points to a real working page or modal
+- Create any missing pages required for the core workflow
+- Use shared layouts and reusable components
+- Use stable seeded demo data
+- If no data exists, show a proper empty state instead of a broken page
+
+PROFESSOR DASHBOARD
+This is the highest priority.
+
+Professor must be able to:
+- create a class
+- edit a class
+- view all their classes
+- open a class management page
+- add materials
+- add quizzes
+- add tests
+- add assignments
+- create and edit a live class session
+- start a live session
+- view enrolled students
+
+REQUIRED PROFESSOR PAGES
+Make sure these pages exist and work:
+- Professor Dashboard Overview
+- My Classes
+- Create Class
+- Class Management Page
+- Materials Page
+- Quizzes Page
+- Tests Page
+- Assignments Page
+- Live Session Page
+- Students Page
+- Settings Page
+
+CREATE CLASS FLOW
+Professor clicks “Create Class” and can enter:
+- class title
+- subject
+- grade level
+- city
+- description
+- price in TND
+- duration in hours
+- date/time
+- recurring or one-time
+
+After creation, the class must open in a real management page.
+
+CLASS MANAGEMENT STRUCTURE
+Each class must have working sections/tabs:
+- Overview
+- Materials
+- Quizzes
+- Tests
+- Assignments
+- Live Session
+- Students
+- Settings
+
+All of these must be real working views.
+
+MATERIALS SECTION
+Professor can:
+- add material
+- enter material title
+- enter material description
+- upload or attach file placeholder
+- save and view materials list
+
+Student can:
+- open the class
+- see the materials list
+
+QUIZZES SECTION
+Professor can:
+- create quiz
+- add title
+- add questions
+- set due date
+- publish quiz
+- view quiz list
+
+TESTS SECTION
+Professor can:
+- create test
+- add title
+- add questions
+- set due date
+- publish test
+- view test list
+
+ASSIGNMENTS SECTION
+Professor can:
+- create assignment
+- add instructions
+- add due date
+- publish assignment
+- view assignment list
+
+LIVE SESSION SECTION
+This is critical.
+
+Each class must have a working Live Session page where the professor can:
+- create a live session
+- add session title
+- add description
+- set price in TND
+- set duration in hours
+- set date/time
+- save session
+- start session
+
+The live session page must clearly show:
+- title
+- description
+- price
+- duration
+- date/time
+- class name
+- start button
+
+STUDENT EXPERIENCE
+Student pages must also work.
+
+Student must be able to:
+- browse classes
+- open class details
+- see class overview
+- see materials
+- see quizzes/tests/assignments if enrolled
+- see live session details
+- pay/enroll through mock payment
+- join live session if enrolled
+
+REQUIRED STUDENT PAGES
+Make sure these pages exist and work:
+- Student Dashboard Overview
+- Browse Classes
+- Class Detail Page
+- My Enrollments
+- Calendar
+- Payments
+- Settings
+
+ADMIN DASHBOARD
+Admin must have working pages and visibility into professor verification.
+
+ADMIN MUST BE ABLE TO SEE
+- all professors
+- KYC status for each professor
+- all uploaded KYC documents
+- approval/rejection status
+- class list
+- transaction list
+
+KYC INTEGRATION REQUIREMENT
+Connect the mock KYCblox data into Étude+ admin dashboard.
+
+For each professor, admin should be able to see:
+- full name
+- city
+- subjects
+- status: pending / approved / rejected
+- uploaded credentials/documents
+- KYC request ID if available
+
+Create a real admin KYC review page or table.
+Do not leave KYC as a fake placeholder.
+
+REQUIRED ADMIN PAGES
+- Admin Overview
+- Professors / KYC Review
+- Classes
+- Transactions
+- Settings
+
+SEED DATA
+Use realistic sample data so pages are not empty.
+
+Must include:
+- at least 3 professors
+- at least 5 classes
+- one fully populated example class called “Math 101”
+- sample KYC docs
+- sample materials
+- sample quizzes
+- sample tests
+- sample assignments
+- sample live session
+- sample enrollments
+
+IMPORTANT DEMO CLASS
+Make “Math 101” fully functional.
+
+Math 101 must include:
+- overview
+- description
+- materials
+- quiz
+- test
+- assignment
+- live session with title, description, price, duration, and date/time
+- professor management view
+- student class view
+
+PAYMENT
+Use a mock payment flow only.
+Student clicks enroll/pay and gains access to the live session and class content.
+
+PLATFORM RULE
+Show that platform takes 15% and professor gets 85% where relevant, but do not overbuild finance features.
+
+ROUTING REQUIREMENTS
+Audit all current navigation and fix it.
+Every sidebar item, tab, card action, and button must route correctly.
+No dead buttons.
+No missing pages.
+No 404 errors.
+
+FINAL INSTRUCTION
+Focus on core product quality, not flashy extras.
+Build the missing professor, student, and admin pages required for the actual workflow.
+Make the app feel complete and usable.
+Most important of all: every single button the user clicks must work.

@@ -1,0 +1,294 @@
+Update the existing Étude+ app and focus on launch-critical functionality only.
+
+IMPORTANT
+I want this app to be usable tomorrow with a real first professor.
+Do not focus on flashy visuals.
+Focus on usability, complete flows, and making every important page work.
+
+TOP PRIORITIES
+1. Every page that opens must have a clear Return / Back button
+2. Professors must be able to easily create quizzes and tests
+3. Professors must be able to register and appear in the admin dashboard
+4. Admin must be able to see professor registration and verification status
+5. Professors must be able to create a class that Tunisian students can join
+6. Professors must be able to post syllabus/materials/tests
+7. Professors must be able to start a live call session
+8. Every button and route must work
+9. No 404 pages
+10. No dead links
+
+GENERAL PRODUCT GOAL
+This should feel like a working launch-ready MVP for a Tunisian online learning platform.
+A professor should be able to:
+- register
+- be reviewed in admin
+- create a class
+- add syllabus/materials
+- create quizzes/tests
+- start a live class
+A student should be able to:
+- browse classes
+- join/enroll
+- access materials
+- take quizzes/tests
+- join live sessions
+
+GLOBAL NAVIGATION REQUIREMENT
+Every page in the app must include:
+- a visible Back or Return button
+- consistent navigation
+- clear route handling
+- no broken tabs or actions
+
+Use a shared page header component that includes:
+- page title
+- Return / Back button
+- optional quick actions
+
+PROFESSOR REGISTRATION FLOW
+Create a working professor registration flow.
+
+Professor must be able to submit:
+- full name
+- email
+- phone
+- city
+- subjects
+- grade levels
+- short bio
+- qualifications / credential upload
+- KYC / verification info through Kblox
+
+After registration:
+- professor should appear in admin dashboard immediately
+- status should show as Pending / Approved / Rejected
+- admin should be able to open the professor profile and see submitted information
+
+ADMIN DASHBOARD REQUIREMENTS
+Admin must be able to see:
+- new professor registrations
+- registration status
+- KYC / Kblox data
+- uploaded documents
+- professor profile
+- created classes
+- transaction/enrollment overview
+
+Create a proper admin table/list for professors with:
+- name
+- city
+- subject
+- status
+- registration date
+- view details button
+
+Professor detail page in admin should show:
+- profile info
+- KYC status
+- uploaded documents
+- classes created
+- approve / reject actions
+
+PROFESSOR DASHBOARD
+Professor dashboard must be fully functional and easy to use.
+
+Professor must have these working pages:
+- Overview
+- My Classes
+- Create Class
+- Class Management
+- Materials / Syllabus
+- Quizzes
+- Tests
+- Live Session
+- Students
+- Settings
+
+CLASS CREATION
+Professor can create a class with:
+- class title
+- subject
+- grade level
+- description
+- city or Tunisia-wide online
+- price in TND
+- duration in hours
+- date/time
+- recurring or one-time
+- syllabus summary
+
+After creation, the class should have its own management page.
+
+CLASS MANAGEMENT STRUCTURE
+Each class should have working sections:
+- Overview
+- Syllabus / Materials
+- Quizzes
+- Tests
+- Live Session
+- Students
+- Settings
+
+SYLLABUS / MATERIALS
+Professor must be able to:
+- upload or add a syllabus
+- add material title
+- add material description
+- attach file placeholder
+- save materials list
+
+Students must be able to:
+- view syllabus
+- view materials after enrollment
+
+QUIZ / TEST CREATION
+This is very important.
+Make quiz/test creation easy and fast.
+
+Professor should be able to click:
+- Create Quiz
+- Create Test
+
+Then build questions through a simple form.
+
+Support question types:
+- multiple choice
+- short answer
+- long answer
+- numeric answer
+- true/false
+
+For multiple choice questions, professor should be able to:
+- enter question text
+- add answer options
+- mark correct answer
+
+For other question types, professor should be able to:
+- enter question text
+- set points
+- optionally add model answer
+
+Quiz/test form should support:
+- title
+- instructions
+- due date
+- total points
+- add/remove questions
+- publish button
+- save draft button
+
+Professor should be able to view created quizzes/tests in a list.
+
+Students should be able to:
+- open quiz/test
+- see questions
+- submit answers
+- see status
+
+LIVE SESSION
+This must work as a clear core feature.
+
+Professor must have a Live Session page for each class where they can:
+- create live session
+- add title
+- add description
+- set date/time
+- set duration
+- set price in TND
+- save session
+- start session
+
+Students must be able to:
+- see live session details
+- enroll/pay
+- join when unlocked
+
+Live Session card should clearly show:
+- title
+- description
+- date/time
+- duration
+- price
+- start/join button
+
+STUDENT EXPERIENCE
+Student pages must also work.
+
+Students must be able to:
+- browse available classes from Tunisia
+- open class details
+- see professor
+- see description
+- see syllabus/materials preview
+- see quizzes/tests preview
+- see live session info
+- enroll/pay
+- join class content if enrolled
+
+Student pages required:
+- Overview
+- Browse Classes
+- Class Detail
+- My Enrollments
+- Calendar
+- Payments
+- Settings
+
+JOINING RULES
+A class should be joinable by students from anywhere in Tunisia.
+Support “Online / Tunisia-wide” as a valid class location option.
+
+KBLOX / KYC INTEGRATION
+Make sure professor registration connects to Kblox/KYC data.
+
+Admin should be able to see for each professor:
+- KYC status
+- uploaded docs
+- verification summary
+- registration linked to professor profile
+
+Do not leave this as a fake placeholder.
+
+SEED DATA
+Use realistic demo data, including:
+- at least 2 professors
+- at least 4 classes
+- one fully working Math 101 example
+- syllabus data
+- quiz data
+- test data
+- one live session
+- one pending professor registration
+- KYC docs visible in admin
+
+LAUNCH-CRITICAL QUALITY IMPROVEMENTS
+Add anything important for a launch-ready tutoring platform, but only if it is practically useful, such as:
+- simple notifications
+- enrollment status
+- clear empty states
+- validation on forms
+- publish/unpublish class status
+- draft/published test status
+- basic student list per class
+
+DO NOT add unnecessary flashy features.
+
+ROUTING AND BUTTON AUDIT
+Audit and fix all navigation.
+Every sidebar item, tab, card action, modal action, and page button must work.
+No dead buttons.
+No 404 errors.
+No missing pages.
+
+FINAL INSTRUCTION
+Make this app feel launch-ready for a first real professor tomorrow.
+The most important things are:
+- back button on every page
+- easy professor registration
+- admin visibility of that registration
+- easy class creation
+- easy syllabus upload
+- easy quiz/test creation
+- working live session flow
+- students can browse and join classes
+- every button works

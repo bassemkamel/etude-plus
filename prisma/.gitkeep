@@ -1,0 +1,3 @@
+schema.prisma
+seed.ts
+migrations

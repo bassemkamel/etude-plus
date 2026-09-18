@@ -1,0 +1,63 @@
+import { Router, type IRouter } from "express";
+import healthRouter from "./health";
+import storageRouter from "./storage";
+import authRouter from "./auth";
+import usersRouter from "./users";
+// MVP: professor/class/session routes suppressed — uncomment to restore
+// import professorsRouter from "./professors";
+// import classesRouter from "./classes";
+// import enrollmentsRouter from "./enrollments";
+// import transactionsRouter from "./transactions";
+// import reviewsRouter from "./reviews";
+// import qualificationsRouter from "./qualifications";
+// import monProfRouter from "./monProf";
+import gradesRouter from "./grades";
+import notificationsRouter from "./notifications";
+import statsRouter from "./stats";
+import adminRouter from "./admin";
+import aiRouter from "./ai";
+import announcementsRouter from "./announcements";
+import creditsRouter from "./credits";
+import discountCodesRouter from "./discountCodes";
+import analyticsRouter from "./analytics";
+import adminAnalyticsRouter from "./adminAnalytics";
+import adminQuestionsRouter from "./adminQuestions";
+import { revisionRouter, adminKBRouter } from "./revision";
+import kbRouter from "./kb";
+import progressRouter from "./progress";
+import curriculumRouter from "./curriculum";
+
+const router: IRouter = Router();
+
+router.use(healthRouter);
+router.use(storageRouter);
+router.use("/auth", authRouter);
+router.use("/users", usersRouter);
+// MVP: suppressed — uncomment to restore
+// router.use("/professors", professorsRouter);
+// router.use("/classes", classesRouter);
+// router.use("/enrollments", enrollmentsRouter);
+// router.use("/transactions", transactionsRouter);
+// router.use("/payments", transactionsRouter);
+// router.use("/reviews", reviewsRouter);
+// router.use("/qualifications", qualificationsRouter);
+// router.use("/mon-prof", monProfRouter);
+router.use("/grades", gradesRouter);
+router.use("/notifications", notificationsRouter);
+router.use("/stats", statsRouter);
+router.use("/admin", adminRouter);
+router.use("/ai", aiRouter);
+router.use("/announcements", announcementsRouter);
+router.use("/credits", creditsRouter);
+router.use("/discount-codes", discountCodesRouter);
+router.use("/admin/discount-codes", discountCodesRouter);
+router.use("/analytics", analyticsRouter);
+router.use("/admin/analytics", adminAnalyticsRouter);
+router.use("/admin/questions", adminQuestionsRouter);
+router.use("/revision", revisionRouter);
+router.use("/admin/knowledge-base", adminKBRouter);
+router.use("/kb", kbRouter);
+router.use("/progress", progressRouter);
+router.use("/curriculum", curriculumRouter);
+
+export default router;

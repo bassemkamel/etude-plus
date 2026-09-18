@@ -1,0 +1,14 @@
+[phases.setup]
+nixPkgs = ["nodejs_20"]
+
+[phases.install]
+cmds = [
+  "npm install -g pnpm@10",
+  "pnpm install --no-frozen-lockfile"
+]
+
+[phases.build]
+cmds = ["pnpm --filter @workspace/etude-plus run build"]
+
+[start]
+cmd = "npx serve frontend/etude-plus/dist -s -l $PORT"

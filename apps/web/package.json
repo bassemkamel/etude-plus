@@ -1,0 +1,35 @@
+{
+  "name": "@etudeplus/web",
+  "version": "0.0.1",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --port 3000",
+    "build": "next build",
+    "start": "next start --port 3000",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@etudeplus/shared": "workspace:*",
+    "@tailwindcss/postcss": "^4.3.3",
+    "@tanstack/react-query": "^5.103.1",
+    "clsx": "^2.1.1",
+    "date-fns": "^4.4.0",
+    "framer-motion": "^13.4.0",
+    "i18next": "^26.4.2",
+    "lucide-react": "^1.47.0",
+    "next": "^15.5.4",
+    "postcss": "^8.5.28",
+    "react": "19.1.0",
+    "react-dom": "19.1.0",
+    "react-i18next": "^17.0.14",
+    "recharts": "^3.10.1",
+    "tailwind-merge": "^3.7.0",
+    "tailwindcss": "^4.3.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.18.6",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "~5.9.2"
+  }
+}

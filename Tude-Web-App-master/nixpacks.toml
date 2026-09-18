@@ -1,0 +1,19 @@
+[phases.setup]
+nixPkgs = ["nodejs_20"]
+
+[phases.install]
+cmds = [
+  "npm install -g pnpm@10",
+  "pnpm install --no-frozen-lockfile"
+]
+
+[phases.build]
+cmds = ["pnpm --filter @workspace/api-server run build"]
+
+[start]
+cmd = "node backend/api-server/dist/index.cjs"
+
+# Revision router is mounted at /api/revision/* in routes/index.ts.
+# Endpoints: /api/revision/ping (no-auth), /api/revision/content/questions,
+# /api/revision/content/topics, /api/revision/content/annales,
+# /api/revision/content/flashcards

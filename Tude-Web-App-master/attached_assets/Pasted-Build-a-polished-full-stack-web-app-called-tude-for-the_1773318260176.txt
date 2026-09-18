@@ -1,0 +1,535 @@
+Build a polished full-stack web app called “Étude+” for the Tunisian education market.
+
+IMPORTANT:
+This app must feel complete, premium, and well-engineered.
+Do NOT leave broken routes, missing pages, fake buttons, or 404 errors.
+Every sidebar item, tab, card action, and button must go somewhere real and working.
+Use reusable components, clean layouts, and stable routing.
+Make it seamless.
+
+CORE PRODUCT
+Étude+ is a live learning platform where qualified professors in Tunisia can create paid live classes for students.
+The most important feature in the whole product is the ability for a professor to create a class and create a live class session inside it with:
+- a title
+- a description
+- a price in TND
+- a duration in hours
+- a date/time
+- a join/start button
+- an embedded video classroom experience
+
+The app should support:
+- Student role
+- Professor role
+- Admin role
+
+DESIGN DIRECTION
+Use a premium modern SaaS + education product design.
+Main colors:
+- yellow
+- light red
+- light blue
+
+The UI should feel:
+- polished
+- modern
+- responsive
+- elegant
+- trustworthy
+- academic
+- high quality
+
+Add subtle educational background design elements using math and Greek symbols such as:
+- π
+- Σ
+- Δ
+- α
+- β
+- θ
+- ∫
+- √
+
+Use them tastefully in the background only.
+Do not clutter the interface.
+
+GENERAL ENGINEERING REQUIREMENTS
+- Build with clean component structure
+- Use proper route architecture
+- No 404 errors
+- No dead links
+- No missing pages
+- Shared dashboard layouts for consistency
+- Responsive across desktop and mobile
+- Use realistic seeded demo data
+- If a page has no data, show a polished empty state instead of breaking
+- Every tab and route must render properly
+- All professor pages and all student pages must work
+
+AUTH / ENTRY FLOW
+First screen:
+- Continue as Student
+- Continue as Professor
+
+Then move into login/signup flow.
+
+Use a mock KYCblox flow for onboarding and authentication.
+Both student and professor can sign in through this mock flow.
+
+TEACHER / PROFESSOR ONBOARDING
+Professor signs up and completes a mock KYCblox verification flow.
+
+Professor profile fields:
+- full name
+- profile photo
+- city in Tunisia
+- subject(s)
+- grade level(s)
+- years of experience
+- short bio
+- qualifications / credentials
+- availability calendar
+
+Professor status:
+- Pending
+- Approved
+- Rejected
+
+Only approved professors can publish classes and host live sessions.
+
+STUDENT ONBOARDING
+Student profile fields:
+- full name
+- grade level
+- city in Tunisia
+- school name
+- preferred subjects
+- optional parent contact
+
+TUNISIA CONTEXT
+Use TND currency.
+Use Tunisian cities such as:
+- Tunis
+- Sfax
+- Sousse
+- Nabeul
+- Ariana
+- Monastir
+- Gabès
+- Bizerte
+
+GRADE LEVELS
+Support:
+- Primary
+- Collège
+- Lycée
+- Baccalauréat
+
+SUBJECTS
+Include:
+- Mathematics
+- Physics
+- Chemistry
+- Biology / SVT
+- Arabic
+- French
+- English
+- Philosophy
+- History / Geography
+- Economics
+- Computer Science
+
+LANDING PAGE
+Create a polished landing page with:
+- Hero
+- How it works
+- For students
+- For professors
+- Verified professors through KYCblox
+- Secure payments
+- Subjects and grade levels
+- Testimonials
+- FAQ
+- CTA
+
+Hero message:
+Étude+ helps Tunisian students find trusted professors and attend paid live online classes.
+
+ROLES
+There are 3 dashboards:
+1. Student
+2. Professor
+3. Admin
+
+STUDENT DASHBOARD
+All student pages must work.
+
+Student dashboard must include:
+- overview page
+- upcoming classes
+- enrolled classes
+- recommended classes
+- recommended professors
+- recent grades
+- notifications
+- calendar
+- payment history
+- settings
+
+Student should be able to:
+- browse classes
+- filter classes by subject
+- filter by professor name
+- filter by city
+- filter by price
+- open class details
+- view materials
+- view quizzes
+- view tests
+- pay for live classes
+- join live classes after enrollment/payment
+
+PROFESSOR DASHBOARD
+This is the highest priority area.
+It must be fully functional.
+No broken tabs, no 404s, no fake routes.
+
+Professor dashboard must include:
+- overview
+- my classes
+- create class
+- calendar
+- earnings
+- students
+- settings
+
+Professor dashboard features:
+- create class
+- edit class
+- delete class
+- manage class content
+- upload materials
+- create quizzes
+- create tests
+- create assignments
+- create live class sessions
+- set class price
+- set duration in hours
+- see enrolled students
+- start live session
+- see earnings after platform fee deduction
+
+PROFESSOR CLASS CREATION FLOW
+Build a smooth class creation flow.
+
+Professor clicks “Create Class” and enters:
+- class title
+- subject
+- grade level
+- city
+- class description
+- cover image optional
+- price in TND
+- duration in hours
+- date/time
+- whether class is one-time or recurring
+
+Then the professor can save the class.
+
+Every class should have its own full class management page.
+
+CLASS STRUCTURE
+Each class must have a real working page with sections or tabs:
+1. Overview
+2. Materials
+3. Quizzes
+4. Tests
+5. Assignments
+6. Live Class
+7. Students
+8. Settings
+
+Every one of these sections must be a real working view.
+
+CLASS OVERVIEW
+Show:
+- class title
+- professor name
+- subject
+- grade level
+- city
+- class description
+- next session
+- price
+- duration
+- number of students
+- quick actions
+
+MATERIALS SECTION
+Professor can:
+- add materials
+- upload files or create material cards
+- enter title
+- enter description
+
+Student can:
+- view materials
+- open/download them
+
+QUIZZES SECTION
+Professor can:
+- create quizzes
+- add title
+- add questions
+- set due date
+- publish quiz
+- view submissions
+- grade if needed
+
+Question types:
+- multiple choice
+- short answer
+- numeric answer
+- long answer
+
+TESTS SECTION
+Professor can:
+- create tests
+- add title
+- add questions
+- set due date
+- publish test
+- review results
+- grade submissions
+
+ASSIGNMENTS SECTION
+Professor can:
+- create homework/assignments
+- add title
+- add instructions
+- add due date
+- publish
+- review student submissions
+- grade and comment
+
+LIVE CLASS SECTION
+This is the most important page in the product.
+
+Inside each class, create a premium Live Class card or box that clearly shows:
+- live class title
+- live class description
+- price in TND
+- duration in hours
+- date/time
+- professor name
+- enrolled students count
+- start/join button
+
+Professor must be able to create and edit this Live Class box.
+
+Example:
+Live Class: Math 101 – Algebra Revision
+Description: A live revision session covering equations, functions, and exam practice.
+Price: 35 TND
+Duration: 2 hours
+
+Make this box visually important and polished.
+
+VIDEO CLASSROOM
+Create an embedded mock live classroom experience that looks real and premium.
+
+Live classroom features:
+- large video area
+- participant list
+- live chat
+- screen share placeholder
+- whiteboard placeholder
+- mute/unmute button
+- camera on/off button
+- leave class button
+
+Professor can:
+- start class
+- manage live session
+
+Students can:
+- join class if enrolled/paid
+- use chat
+- see participants
+- leave class
+
+This can be mocked visually, but it must feel polished and realistic.
+
+PAYMENT FLOW
+Use a mock payment gateway for now.
+Do not integrate the real payment provider yet.
+
+Payment logic:
+- student opens class
+- sees live class price in TND
+- clicks enroll/pay
+- sees a checkout summary
+- confirms payment
+- payment success unlocks access to live class
+
+Platform business rule:
+- platform takes 15%
+- professor receives 85%
+Show this in earnings/admin views where relevant.
+
+CLASS DETAIL PAGE FOR STUDENTS
+Student class page should show:
+- class name
+- professor
+- description
+- subject
+- grade
+- city
+- materials preview
+- quizzes/tests preview
+- live class card
+- price
+- duration
+- enroll/pay button
+
+CALENDAR
+Add a working calendar experience for both students and professors.
+
+Student calendar:
+- upcoming live classes
+- quiz due dates
+- test due dates
+- assignment due dates
+
+Professor calendar:
+- scheduled classes
+- recurring classes
+- grading reminders
+- office hours or availability
+
+GRADES
+Student grades page:
+- recent grades
+- grade history
+- averages by subject
+- professor comments
+
+Professor grades/submissions page:
+- pending grading
+- class averages
+- student performance
+- submissions list
+
+ADMIN DASHBOARD
+All admin pages must also work.
+
+Admin features:
+- overview
+- manage users
+- manage professors
+- approve/reject professors
+- manage classes
+- manage subjects
+- manage transactions
+- manage platform settings
+- content moderation
+
+EXTRA FEATURES
+Include these to make the MVP stronger:
+- teacher/professor ratings and reviews
+- favorite/saved classes
+- notifications center
+- attendance tracking
+- search bar
+- analytics cards
+- earnings chart
+- verified professor badge
+- top rated badge
+- polished empty states
+
+SEED DATA
+Use realistic demo data so the app feels alive.
+
+Include at least:
+- 3 professors
+- 8 classes
+- 1 fully working example class called “Math 101”
+- sample materials
+- sample quizzes
+- sample tests
+- sample assignments
+- sample students
+- sample enrollments
+- sample notifications
+- sample transactions
+
+IMPORTANT REQUIRED EXAMPLE
+Make sure there is a fully working example class called “Math 101”.
+
+Inside Math 101 include:
+- overview
+- description
+- at least 2 materials
+- at least 1 quiz
+- at least 1 test
+- at least 1 assignment
+- a Live Class card with:
+  - title
+  - description
+  - price
+  - duration in hours
+  - date/time
+- working student-facing class details page
+- working professor-facing management page
+
+ROUTES / PAGES THAT MUST EXIST
+Create all of these and make sure they work:
+- landing page
+- role selection page
+- sign in / sign up
+- onboarding pages
+- student dashboard
+- professor dashboard
+- admin dashboard
+- browse classes page
+- class detail page
+- professor class management page
+- materials page
+- quizzes page
+- tests page
+- assignments page
+- live class page
+- calendar page
+- earnings page
+- payments page
+- settings page
+
+NAVIGATION REQUIREMENTS
+Every sidebar item, tab, card button, CTA, and action button must lead to a real page or modal.
+No dead links.
+No placeholder routes.
+No missing pages.
+No 404 errors.
+
+TECHNICAL QUALITY
+- Use nested routes if needed for class sections
+- Use consistent route naming
+- Shared layout for dashboards
+- Reusable cards, forms, dialogs, tabs, and tables
+- Proper state management
+- Good empty states
+- Polished loading/error handling
+- Stable sample data
+- Clean UI structure
+
+FINAL INSTRUCTION
+Do not produce a half-finished prototype.
+Build a polished startup-quality MVP for Étude+ with complete working navigation and a fully functional professor flow to create and manage live classes.
+
+The number one priority is:
+1. no broken pages
+2. no 404 errors
+3. a fully working professor dashboard
+4. a strong live class experience
+5. a polished Math 101 demo class
+
+Make it beautiful, complete, and seamless.
