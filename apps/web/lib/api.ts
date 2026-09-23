@@ -16,11 +16,12 @@ async function parse(res: Response) {
 }
 
 export async function api<T = any>(path: string, init: RequestInit = {}, retried = false): Promise<T> {
+  const hasBody = init.body !== undefined && init.body !== null;
   const res = await fetch(`${API_URL}${path}`, {
     ...init,
     credentials: "include",
     headers: {
-      "Content-Type": "application/json",
+      ...(hasBody ? { "Content-Type": "application/json" } : {}),
       ...(init.headers ?? {}),
     },
   });

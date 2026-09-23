@@ -2,14 +2,53 @@ import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuard
 import type { FastifyRequest } from "fastify";
 import bcrypt from "bcryptjs";
 import { Prisma } from "@prisma/client";
+import { GoogleGenAI } from "@google/genai";
 import { PrismaService } from "./prisma.service";
 import { AuthGuard, Roles, RolesGuard, type AuthedUser } from "./common/guards";
 import { apiError } from "./common/errors";
 
+type AiSourceFile = {
+  name: string;
+  mimeType: string;
+  data: string;
+};
+
+type AiGeneratedQuestion = {
+  question?: string;
+  question_text?: string;
+  options?: string[];
+  answer?: string;
+  marks_breakdown?: string;
+  topic?: string;
+  difficulty?: string;
+  type?: string;
+};
+
+function stripJsonFences(text: string) {
+  return text
+    .trim()
+    .replace(/^```(?:json)?\s*/i, "")
+    .replace(/\s*```$/i, "")
+    .trim();
+}
+
+function parseAiQuestions(text: string): AiGeneratedQuestion[] {
+  const parsed = JSON.parse(stripJsonFences(text));
+  const items = Array.isArray(parsed) ? parsed : parsed.questions;
+  return Array.isArray(items) ? items : [];
+}
+
+function formatAiQuestionText(item: AiGeneratedQuestion) {
+  const question = String(item.question ?? item.question_text ?? "").trim();
+  const options = Array.isArray(item.options) ? item.options.filter(Boolean) : [];
+  if (!options.length) return question;
+  return `${question}\n\n${options.map((option, index) => `${String.fromCharCode(65 + index)}. ${option}`).join("\n")}`;
+}
+
 @Controller("admin")
 @UseGuards(AuthGuard, RolesGuard)
 export class AdminController {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService) { }
 
   private async audit(req: FastifyRequest & { user: AuthedUser }, action: string, entity: string, entityId?: string, metadata: object = {}) {
     await this.prisma.auditLog.create({
@@ -336,7 +375,7 @@ export class AdminController {
 
   @Post("questions/generate")
   @Roles("admin", "super_admin")
-  generate(@Body() body: any) {
+  async generate(@Req() req: FastifyRequest & { user: AuthedUser }, @Body() body: any) {
     if (process.env.ENABLE_AI !== "true") {
       return {
         persisted: false,
@@ -352,7 +391,135 @@ export class AdminController {
         ],
       };
     }
-    apiError(HttpStatus.NOT_IMPLEMENTED, "AI_OFF", "Provider IA non branché.");
+    const apiKey = process.env.AI_API_KEY ?? process.env.GOOGLE_GENAI_API_KEY;
+    if (!apiKey) apiError(HttpStatus.BAD_REQUEST, "AI_KEY_MISSING", "AI_API_KEY manquant dans .env.");
+
+    const files = Array.isArray(body.files) ? (body.files as AiSourceFile[]) : [];
+    if (!files.length) apiError(HttpStatus.BAD_REQUEST, "FILES_REQUIRED", "Ajoutez au moins un fichier PDF.");
+
+    const prompt = String(body.prompt ?? "").trim();
+    if (prompt.length < 20) apiError(HttpStatus.BAD_REQUEST, "PROMPT_REQUIRED", "Prompt trop court.");
+
+    const meta = {
+      gradeLevel: String(body.gradeLevel ?? "bac"),
+      sectionKey: String(body.sectionKey ?? ""),
+      subject: String(body.subject ?? "Mathématiques"),
+      topic: String(body.topic ?? "Général"),
+      difficulty: String(body.difficulty ?? "moyen"),
+      status: String(body.status ?? "draft"),
+      language: String(body.language ?? "Français"),
+    };
+
+    const model = String(body.model ?? process.env.GOOGLE_GENAI_MODEL ?? "gemini-3.6-flash");
+    const timeout = Number(process.env.GOOGLE_GENAI_TIMEOUT_MS ?? 600_000);
+    const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout } } as any);
+    console.log("files", files);
+
+    let response: any = null;
+    try {
+      response = await ai.models.generateContent({
+        model,
+        contents: [
+          {
+            text: `${prompt}
+
+Return valid JSON only. Use this array shape:
+[
+  {
+    "question": "Question text",
+    "options": ["A", "B", "C", "D"],
+    "answer": "Correct answer",
+    "marks_breakdown": "Short explanation or grading notes"
+  }
+]
+Do not include markdown fences.`,
+          },
+          ...files.map((file) => ({
+            inlineData: {
+              data: file.data,
+              mimeType: file.mimeType || "application/pdf",
+            },
+          })),
+        ],
+      } as any);
+    } catch (error) {
+      const causeCode = (error as any)?.cause?.code;
+      if (causeCode === "UND_ERR_HEADERS_TIMEOUT" || causeCode === "UND_ERR_BODY_TIMEOUT") {
+        apiError(HttpStatus.GATEWAY_TIMEOUT, "AI_TIMEOUT", "Google GenAI a pris trop de temps a repondre. Essayez moins de fichiers, un PDF plus petit, ou augmentez GOOGLE_GENAI_TIMEOUT_MS.");
+      }
+      apiError(HttpStatus.BAD_GATEWAY, "AI_PROVIDER_ERROR", (error as Error).message || "Erreur Google GenAI.");
+    }
+
+    const raw = response.text ?? "";
+    let generated: AiGeneratedQuestion[];
+    try {
+      generated = parseAiQuestions(raw);
+    } catch {
+      apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_JSON_INVALID", "La reponse IA n'est pas un JSON valide.");
+    }
+
+    if (!generated!.length) apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_EMPTY", "Aucune question generee.");
+
+    const saved = [];
+    for (const item of generated!) {
+      const questionText = formatAiQuestionText(item);
+      if (!questionText) continue;
+      const answer = String(item.answer ?? "").trim();
+      const question = await this.prisma.question.create({
+        data: {
+          origin: "ai_admin",
+          status: meta.status as any,
+          createdById: req.user.id,
+          gradeLevel: meta.gradeLevel,
+          sectionKey: meta.sectionKey,
+          subject: meta.subject,
+          topic: item.topic ?? meta.topic,
+          type: (item.type ?? (Array.isArray(item.options) && item.options.length ? "QCM" : "Exercice")) as any,
+          difficulty: (item.difficulty ?? meta.difficulty) as any,
+          language: meta.language,
+          questionText,
+          context: `AI generated from: ${files.map((file) => file.name).join(", ")}`,
+          totalMarks: 1,
+          estimatedTimeMinutes: 2,
+          publishedAt: meta.status === "published" ? new Date() : null,
+          parts: {
+            create: [{ label: "a", text: questionText, marks: 1, orderIndex: 0 }],
+          },
+          markSchemes: {
+            create: [{ partLabel: "a", answer, marksBreakdown: item.marks_breakdown ?? answer, orderIndex: 0 }],
+          },
+        },
+        include: { parts: true, markSchemes: true },
+      });
+      saved.push(question);
+    }
+
+    for (const file of files) {
+      await this.prisma.knowledgeBaseFile.create({
+        data: {
+          fileName: file.name,
+          storageKey: `ai-inline/${Date.now()}-${file.name}`,
+          contentType: file.mimeType || "application/pdf",
+          subject: meta.subject,
+          gradeLevel: meta.gradeLevel,
+          sectionKey: meta.sectionKey,
+          topic: meta.topic,
+          status: "ready",
+          questionsCount: saved.length,
+          uploadedById: req.user.id,
+          processedAt: new Date(),
+        },
+      });
+    }
+
+    await this.audit(req, "ai_generate_questions", "question", saved[0]?.id, {
+      model,
+      files: files.map((file) => ({ name: file.name, mimeType: file.mimeType })),
+      prompt,
+      count: saved.length,
+    });
+
+    return { persisted: true, raw, questions: saved };
   }
 
   @Post("questions/:id/publish")

@@ -12,7 +12,7 @@ import { AppModule } from "./app.module";
 async function bootstrap() {
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
-    new FastifyAdapter({ logger: true }),
+    new FastifyAdapter({ logger: true, bodyLimit: 25 * 1024 * 1024 }),
   );
 
   await app.register(cookie as any);
@@ -24,6 +24,8 @@ async function bootstrap() {
 
   app.enableCors({
     origin: origins,
+    methods: ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
     credentials: true,
   });
 

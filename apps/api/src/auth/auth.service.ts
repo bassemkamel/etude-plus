@@ -16,7 +16,7 @@ export class AuthService {
   constructor(
     private prisma: PrismaService,
     private mail: MailService,
-  ) {}
+  ) { }
 
   private async issueTokens(userId: string, role: string) {
     const jti = randomBytes(16).toString("hex");
@@ -141,21 +141,21 @@ export class AuthService {
       studentProfile: user!.student,
       subscription: current
         ? {
-            id: current.id,
-            status: current.status,
-            startsAt: current.startsAt,
-            endsAt: current.endsAt,
-            plan: {
-              id: current.plan.id,
-              code: current.plan.code,
-              nameFr: current.plan.nameFr,
-              nameEn: current.plan.nameEn,
-              nameAr: current.plan.nameAr,
-              priceTnd: current.plan.priceTnd,
-              interval: current.plan.interval,
-              features: current.plan.features,
-            },
-          }
+          id: current.id,
+          status: current.status,
+          startsAt: current.startsAt,
+          endsAt: current.endsAt,
+          plan: {
+            id: current.plan.id,
+            code: current.plan.code,
+            nameFr: current.plan.nameFr,
+            nameEn: current.plan.nameEn,
+            nameAr: current.plan.nameAr,
+            priceTnd: current.plan.priceTnd,
+            interval: current.plan.interval,
+            features: current.plan.features,
+          },
+        }
         : null,
     };
   }
