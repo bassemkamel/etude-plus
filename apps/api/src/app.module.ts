@@ -5,7 +5,8 @@ import { MailService } from "./mail.service";
 import { AuthService } from "./auth/auth.service";
 import { AuthController, UsersController, StudentsController } from "./auth/auth.controller";
 import { CatalogController } from "./catalog.controller";
-import { AdminController } from "./admin.controller";
+import { AdminController } from "./admin/admin.controller";
+import { AdminService } from "./admin/admin.service";
 import { AuthGuard, RolesGuard } from "./common/guards";
 
 @Module({
@@ -17,6 +18,6 @@ import { AuthGuard, RolesGuard } from "./common/guards";
     CatalogController,
     AdminController,
   ],
-  providers: [PrismaService, MailService, AuthService, AuthGuard, RolesGuard],
+  providers: [PrismaService, MailService, AuthService, AdminService, AuthGuard, RolesGuard],
 })
-export class AppModule {}
+export class AppModule { }
