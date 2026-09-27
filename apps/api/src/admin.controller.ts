@@ -3,6 +3,8 @@ import type { FastifyRequest } from "fastify";
 import bcrypt from "bcryptjs";
 import { Prisma } from "@prisma/client";
 import { GoogleGenAI } from "@google/genai";
+import { randomUUID } from "node:crypto";
+import { PDFDocument } from "pdf-lib";
 import { PrismaService } from "./prisma.service";
 import { AuthGuard, Roles, RolesGuard, type AuthedUser } from "./common/guards";
 import { apiError } from "./common/errors";
@@ -23,6 +25,94 @@ type AiGeneratedQuestion = {
   difficulty?: string;
   type?: string;
 };
+
+type AiSourceChunk = {
+  file: AiSourceFile;
+  pageRange?: string;
+  source?: PDFDocument;
+  startPage?: number;
+  endPage?: number;
+};
+
+type AiGenerationJob = {
+  userId: string;
+  status: "preparing" | "reading" | "generating" | "saving" | "completed" | "failed";
+  progress: number;
+  message: string;
+  currentChunk: number;
+  totalChunks: number;
+  updatedAt: number;
+  result?: unknown;
+  error?: string;
+};
+
+const aiGenerationJobs = new Map<string, AiGenerationJob>();
+
+function cleanExpiredAiJobs() {
+  const expiry = Date.now() - 60 * 60 * 1000;
+  for (const [id, job] of aiGenerationJobs) {
+    if (job.updatedAt < expiry) aiGenerationJobs.delete(id);
+  }
+}
+
+function isTransientAiError(error: unknown) {
+  if (!error || typeof error !== "object") return false;
+  const value = error as any;
+  const statuses = [
+    value.status,
+    value.statusCode,
+    value.code,
+    value.error?.code,
+    value.error?.status,
+    value.response?.status,
+    value.cause?.status,
+  ];
+  if (statuses.some((status) => {
+    const code = Number(status);
+    return code === 429 || (code >= 500 && code <= 599);
+  })) return true;
+  return /high demand|temporar(?:ily|y) unavailable|overload|unavailable|resource_exhausted/i.test(value.message ?? "");
+}
+
+async function splitPdfIntoChunks(file: AiSourceFile, pagesPerChunk: number): Promise<AiSourceChunk[]> {
+  let source: PDFDocument;
+  try {
+    source = await PDFDocument.load(Buffer.from(file.data, "base64"));
+  } catch {
+    apiError(HttpStatus.BAD_REQUEST, "PDF_INVALID", `Impossible de lire le PDF ${file.name}.`);
+  }
+
+  const pageCount = source!.getPageCount();
+  if (!pageCount) apiError(HttpStatus.BAD_REQUEST, "PDF_EMPTY", `Le PDF ${file.name} ne contient aucune page.`);
+
+  const chunks: AiSourceChunk[] = [];
+  for (let start = 0; start < pageCount; start += pagesPerChunk) {
+    const end = Math.min(start + pagesPerChunk, pageCount);
+    chunks.push({
+      file,
+      pageRange: `${start + 1}-${end}`,
+      source: source!,
+      startPage: start,
+      endPage: end,
+    });
+  }
+  return chunks;
+}
+
+async function createPdfChunk(chunk: AiSourceChunk): Promise<AiSourceFile> {
+  const document = await PDFDocument.create();
+  const pages = await document.copyPages(
+    chunk.source!,
+    Array.from({ length: chunk.endPage! - chunk.startPage! }, (_, index) => chunk.startPage! + index),
+  );
+  pages.forEach((page) => document.addPage(page));
+  const bytes = await document.save();
+  return {
+    ...chunk.file,
+    mimeType: "application/pdf",
+    data: Buffer.from(bytes).toString("base64"),
+  };
+}
 
 function stripJsonFences(text: string) {
   return text
@@ -393,12 +483,69 @@ export class AdminController {
     }
     const apiKey = process.env.AI_API_KEY ?? process.env.GOOGLE_GENAI_API_KEY;
     if (!apiKey) apiError(HttpStatus.BAD_REQUEST, "AI_KEY_MISSING", "AI_API_KEY manquant dans .env.");
-
     const files = Array.isArray(body.files) ? (body.files as AiSourceFile[]) : [];
     if (!files.length) apiError(HttpStatus.BAD_REQUEST, "FILES_REQUIRED", "Ajoutez au moins un fichier PDF.");
-
     const prompt = String(body.prompt ?? "").trim();
     if (prompt.length < 20) apiError(HttpStatus.BAD_REQUEST, "PROMPT_REQUIRED", "Prompt trop court.");
+
+    cleanExpiredAiJobs();
+    const jobId = randomUUID();
+    aiGenerationJobs.set(jobId, {
+      userId: req.user.id,
+      status: "preparing",
+      progress: 2,
+      message: "Préparation des documents",
+      currentChunk: 0,
+      totalChunks: 0,
+      updatedAt: Date.now(),
+    });
+    void this.runQuestionGeneration(req, body, jobId, apiKey).catch((error: unknown) => {
+      const job = aiGenerationJobs.get(jobId);
+      if (!job) return;
+      const response = error instanceof Error && "getResponse" in error
+        ? (error as any).getResponse()
+        : null;
+      const responseMessage = response?.message;
+      const errorMessage = Array.isArray(responseMessage)
+        ? responseMessage.join("; ")
+        : typeof responseMessage === "string"
+          ? responseMessage
+          : error instanceof Error
+            ? error.message
+            : typeof error === "string" ? error : "Erreur pendant la génération IA.";
+      job.status = "failed";
+      job.error = errorMessage;
+      job.message = "La génération a échoué";
+      job.updatedAt = Date.now();
+    });
+    return { jobId };
+  }
+
+  @Get("questions/generate/:jobId")
+  @Roles("admin", "super_admin")
+  generationStatus(@Req() req: FastifyRequest & { user: AuthedUser }, @Param("jobId") jobId: string) {
+    cleanExpiredAiJobs();
+    const job = aiGenerationJobs.get(jobId);
+    if (!job || job.userId !== req.user.id) apiError(HttpStatus.NOT_FOUND, "NOT_FOUND", "Génération introuvable.");
+    return {
+      status: job.status,
+      progress: job.progress,
+      message: job.message,
+      currentChunk: job.currentChunk,
+      totalChunks: job.totalChunks,
+      ...(job.status === "completed" ? { result: job.result } : {}),
+      ...(job.status === "failed" ? { error: job.error } : {}),
+    };
+  }
+
+  private async runQuestionGeneration(req: FastifyRequest & { user: AuthedUser }, body: any, jobId: string, apiKey: string) {
+    const updateJob = (updates: Partial<AiGenerationJob>) => {
+      const job = aiGenerationJobs.get(jobId);
+      if (!job) return;
+      Object.assign(job, updates, { updatedAt: Date.now() });
+    };
+    const files = body.files as AiSourceFile[];
+    const prompt = String(body.prompt ?? "").trim();
 
     const meta = {
       gradeLevel: String(body.gradeLevel ?? "bac"),
@@ -410,18 +557,201 @@ export class AdminController {
       language: String(body.language ?? "Français"),
     };
 
-    const model = String(body.model ?? process.env.GOOGLE_GENAI_MODEL ?? "gemini-3.6-flash");
+    const model = String(body.model ?? process.env.GOOGLE_GENAI_MODEL ?? "gemini-3.8-flash");
     const timeout = Number(process.env.GOOGLE_GENAI_TIMEOUT_MS ?? 600_000);
     const ai = new GoogleGenAI({ apiKey, httpOptions: { timeout } } as any);
-    console.log("files", files);
+    let activeModel = model;
+    const unavailableModels = new Set<string>();
+    let fallbackModelsPromise: Promise<string[]> | undefined;
+    const getAvailableFallbackModels = () => {
+      fallbackModelsPromise ??= (async () => {
+        const available = new Set<string>();
+        try {
+          const listedModels = await ai.models.list({ config: { pageSize: 100 } });
+          for await (const listedModel of listedModels) {
+            const name = listedModel.name?.replace(/^models\//, "");
+            if (
+              name &&
+              listedModel.supportedActions?.includes("generateContent") &&
+              /^gemini-(?:[3-9]\d*(?:\.\d+)*-flash(?:-lite)?|flash(?:-lite)?-latest)(?:-|$)/i.test(name) &&
+              !/(image|audio|tts|live)/i.test(name)
+            ) {
+              available.add(name);
+            }
+          }
+        } catch (error) {
+          console.warn("[Gemini] Could not list available fallback models", {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
 
-    let response: any = null;
-    try {
-      response = await ai.models.generateContent({
-        model,
-        contents: [
-          {
-            text: `${prompt}
+        const configuredOrder = (process.env.GOOGLE_GENAI_FALLBACK_MODELS ?? "")
+          .split(",")
+          .map((name) => name.trim().replace(/^models\//, ""))
+          .filter((name) => available.has(name));
+        const discoveredOrder = [...available].sort((left, right) => {
+          const score = (name: string) =>
+            (/(preview|experimental|\bexp\b)/i.test(name) ? 2 : 0) + (/flash-lite/i.test(name) ? 1 : 0);
+          return score(left) - score(right) || right.localeCompare(left, undefined, { numeric: true });
+        });
+        return [...new Set([...configuredOrder, ...discoveredOrder])]
+          .filter((name) => name !== model && name !== activeModel)
+          .slice(0, 3);
+      })();
+      return fallbackModelsPromise;
+    };
+    const configuredChunkSize = Number(process.env.GOOGLE_GENAI_PDF_CHUNK_PAGES ?? 20);
+    const pagesPerChunk = Number.isInteger(configuredChunkSize) && configuredChunkSize > 0
+      ? Math.min(configuredChunkSize, 50)
+      : 20;
+    const chunks: AiSourceChunk[] = [];
+    for (const file of files) {
+      const isPdf = file.mimeType?.toLowerCase() === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
+      chunks.push(...(isPdf ? await splitPdfIntoChunks(file, pagesPerChunk) : [{ file }]));
+    }
+    updateJob({
+      status: "reading",
+      progress: 5,
+      message: `Lecture de ${chunks.length} segment(s) du document`,
+      currentChunk: 0,
+      totalChunks: chunks.length,
+    });
+
+    const generateContent = async (contents: any[], maxOutputTokens: number, operation: string) => {
+      let candidates = [activeModel];
+      let candidateIndex = 0;
+      let lastFailureWasMissingModel = false;
+      while (candidateIndex < candidates.length) {
+        const candidateModel = candidates[candidateIndex];
+        let shouldFailover = false;
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            const response = await ai.models.generateContent({
+              model: candidateModel,
+              contents,
+              config: { maxOutputTokens, temperature: 0.2 },
+            } as any);
+            activeModel = candidateModel;
+            return response;
+          } catch (error) {
+            const details = error && typeof error === "object" ? error as any : {};
+            const causeCode = details.cause?.code;
+            const status = details.status ?? details.statusCode ?? details.error?.code ?? details.response?.status;
+            const providerMessage = typeof details.message === "string" ? details.message : String(error);
+            console.error("[Gemini] generateContent request failed", {
+              model: candidateModel,
+              operation,
+              attempt,
+              maxAttempts: 2,
+              name: details.name,
+              status,
+              code: details.code ?? details.error?.status ?? causeCode,
+              message: providerMessage,
+              providerError: details.error,
+              response: details.response
+                ? { status: details.response.status, statusText: details.response.statusText }
+                : undefined,
+            });
+            if (causeCode === "UND_ERR_HEADERS_TIMEOUT" || causeCode === "UND_ERR_BODY_TIMEOUT") {
+              apiError(HttpStatus.GATEWAY_TIMEOUT, "AI_TIMEOUT", "Google GenAI a pris trop de temps a repondre. Essayez un nombre de pages par chunk plus petit, ou augmentez GOOGLE_GENAI_TIMEOUT_MS.");
+            }
+            const modelNotFound =
+              Number(status) === 404 ||
+              String(status).toUpperCase() === "NOT_FOUND";
+            if (modelNotFound) {
+              unavailableModels.add(candidateModel);
+              lastFailureWasMissingModel = true;
+              shouldFailover = true;
+              break;
+            }
+            if (!isTransientAiError(error)) {
+              apiError(HttpStatus.BAD_GATEWAY, "AI_PROVIDER_ERROR", (error as Error).message || "Erreur Google GenAI.");
+            }
+            lastFailureWasMissingModel = false;
+
+            if (attempt === 1) {
+              updateJob({ message: `Gemini ${candidateModel} est temporairement indisponible; nouvelle tentative` });
+              await new Promise((resolve) => setTimeout(resolve, 10_000));
+              continue;
+            }
+
+            unavailableModels.add(candidateModel);
+            shouldFailover = true;
+            break;
+          }
+        }
+
+        if (shouldFailover) {
+          if (candidateIndex === 0) {
+            const discovered = await getAvailableFallbackModels();
+            candidates = [
+              candidateModel,
+              ...discovered.filter((fallback) => fallback !== candidateModel && !unavailableModels.has(fallback)),
+            ];
+          }
+          candidateIndex += 1;
+          const nextModel = candidates[candidateIndex];
+          if (nextModel) {
+            activeModel = nextModel;
+            console.warn("[Gemini] Switching to an available fallback model", {
+              operation,
+              fromModel: candidateModel,
+              toModel: nextModel,
+            });
+            updateJob({ message: `Bascule vers le modèle Gemini disponible ${nextModel}` });
+            continue;
+          }
+        }
+        break;
+      }
+      if (lastFailureWasMissingModel) {
+        apiError(HttpStatus.BAD_GATEWAY, "AI_MODEL_UNAVAILABLE", "Le modèle Gemini configuré n'est plus accessible et aucun modèle Flash compatible disponible n'a pu prendre le relais.");
+      }
+      apiError(HttpStatus.SERVICE_UNAVAILABLE, "AI_PROVIDER_BUSY", "Google Gemini est temporairement surchargé. Aucun modèle Flash alternatif disponible; réessayez dans quelques minutes.");
+    };
+
+    let documentContext = "";
+    for (const [index, chunk] of chunks.entries()) {
+      const label = chunk.pageRange ? `${chunk.file.name}, pages ${chunk.pageRange}` : chunk.file.name;
+      const chunkFile = chunk.source ? await createPdfChunk(chunk) : chunk.file;
+      updateJob({
+        status: "reading",
+        progress: Math.round(5 + (index / chunks.length) * 75),
+        message: `Lecture du segment ${index + 1}/${chunks.length} : ${label}`,
+        currentChunk: index + 1,
+      });
+      const summaryResponse = await generateContent([
+        {
+          text: `You are analyzing source documents in sequential chunks to prepare educational questions. Read this entire chunk carefully. Maintain comprehensive, factual document notes across chunks: preserve important concepts, definitions, formulas, examples, exercise structure, answers, mark allocations, and page references. Merge the new information with the prior notes; do not discard useful prior facts. Keep the notes compact but sufficiently detailed to cover the whole source, and do not invent missing information.
+
+User's task: ${prompt}
+Chunk ${index + 1} of ${chunks.length}: ${label}
+
+Prior consolidated document notes:
+${documentContext || "No earlier chunks."}
+
+Return only the updated consolidated notes, not questions or commentary.`,
+        },
+        {
+          inlineData: {
+            data: chunkFile.data,
+            mimeType: chunkFile.mimeType || "application/pdf",
+          },
+        },
+      ], 4096, `document chunk ${index + 1}/${chunks.length}`);
+      documentContext = String(summaryResponse.text ?? "").trim();
+      if (!documentContext) apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_EMPTY_SUMMARY", `L'IA n'a pas pu analyser ${label}.`);
+      updateJob({ progress: Math.round(5 + ((index + 1) / chunks.length) * 75) });
+    }
+
+    updateJob({ status: "generating", progress: 84, message: "Génération des questions" });
+    const response = await generateContent([{
+      text: `${prompt}
+
+Use the following consolidated notes from the complete source document(s). Treat them as the authoritative context across all page ranges. Do not claim details that are not present in the notes.
+
+Complete document notes:
+${documentContext}
 
 Return valid JSON only. Use this array shape:
 [
@@ -433,22 +763,7 @@ Return valid JSON only. Use this array shape:
   }
 ]
 Do not include markdown fences.`,
-          },
-          ...files.map((file) => ({
-            inlineData: {
-              data: file.data,
-              mimeType: file.mimeType || "application/pdf",
-            },
-          })),
-        ],
-      } as any);
-    } catch (error) {
-      const causeCode = (error as any)?.cause?.code;
-      if (causeCode === "UND_ERR_HEADERS_TIMEOUT" || causeCode === "UND_ERR_BODY_TIMEOUT") {
-        apiError(HttpStatus.GATEWAY_TIMEOUT, "AI_TIMEOUT", "Google GenAI a pris trop de temps a repondre. Essayez moins de fichiers, un PDF plus petit, ou augmentez GOOGLE_GENAI_TIMEOUT_MS.");
-      }
-      apiError(HttpStatus.BAD_GATEWAY, "AI_PROVIDER_ERROR", (error as Error).message || "Erreur Google GenAI.");
-    }
+    }], 8192, "final question generation");
 
     const raw = response.text ?? "";
     let generated: AiGeneratedQuestion[];
@@ -460,6 +775,7 @@ Do not include markdown fences.`,
 
     if (!generated!.length) apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_EMPTY", "Aucune question generee.");
 
+    updateJob({ status: "saving", progress: 92, message: "Enregistrement des questions" });
     const saved = [];
     for (const item of generated!) {
       const questionText = formatAiQuestionText(item);
@@ -519,7 +835,9 @@ Do not include markdown fences.`,
       count: saved.length,
     });
 
-    return { persisted: true, raw, questions: saved };
+    const result = { persisted: true, raw, questions: saved };
+    updateJob({ status: "completed", progress: 100, message: "Document lu et questions enregistrees", result });
+    return result;
   }
 
   @Post("questions/:id/publish")

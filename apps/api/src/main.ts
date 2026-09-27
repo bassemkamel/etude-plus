@@ -10,9 +10,13 @@ import { DocumentBuilder, SwaggerModule } from "@nestjs/swagger";
 import { AppModule } from "./app.module";
 
 async function bootstrap() {
+  const configuredBodyLimit = Number(process.env.API_BODY_LIMIT_BYTES ?? 100 * 1024 * 1024);
+  const bodyLimit = Number.isFinite(configuredBodyLimit)
+    ? Math.min(Math.max(configuredBodyLimit, 25 * 1024 * 1024), 200 * 1024 * 1024)
+    : 100 * 1024 * 1024;
   const app = await NestFactory.create<NestFastifyApplication>(
     AppModule,
-    new FastifyAdapter({ logger: true, bodyLimit: 25 * 1024 * 1024 }),
+    new FastifyAdapter({ logger: true, bodyLimit }),
   );
 
   await app.register(cookie as any);

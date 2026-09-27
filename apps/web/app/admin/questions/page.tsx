@@ -19,6 +19,16 @@ Return valid JSON only:
   }
 ]`;
 
+type AiGenerationProgress = {
+  status: "preparing" | "reading" | "generating" | "saving" | "completed" | "failed";
+  progress: number;
+  message: string;
+  currentChunk: number;
+  totalChunks: number;
+  result?: any;
+  error?: string;
+};
+
 function QuestionsInner() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<"list" | "new" | "ai">("list");
@@ -43,6 +53,7 @@ function QuestionsInner() {
   const [aiFiles, setAiFiles] = useState<File[]>([]);
   const [aiPrompt, setAiPrompt] = useState(defaultPrompt);
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiProgress, setAiProgress] = useState<AiGenerationProgress | null>(null);
 
   async function save(origin = "manual", extra: any = {}) {
     try {
@@ -88,6 +99,13 @@ function QuestionsInner() {
       return;
     }
     setAiLoading(true);
+    setAiProgress({
+      status: "preparing",
+      progress: 0,
+      message: "Envoi et préparation des documents",
+      currentChunk: 0,
+      totalChunks: 0,
+    });
     try {
       const files = await Promise.all(
         aiFiles.map(async (file) => ({
@@ -96,7 +114,7 @@ function QuestionsInner() {
           data: await fileToBase64(file),
         })),
       );
-      const data = await api("/api/v1/admin/questions/generate", {
+      const started = await api<any>("/api/v1/admin/questions/generate", {
         method: "POST",
         body: JSON.stringify({
           files,
@@ -109,12 +127,41 @@ function QuestionsInner() {
           status: "draft",
         }),
       });
+      if (!started.jobId) {
+        setAi(started);
+        await qc.invalidateQueries({ queryKey: ["admin-q"] });
+        toast({ title: `${started.questions?.length ?? 0} questions enregistrees en brouillon` });
+        setTab("list");
+        return;
+      }
+      let progress: AiGenerationProgress;
+      let pollingNetworkRetries = 0;
+      while (true) {
+        try {
+          progress = await api<AiGenerationProgress>(`/api/v1/admin/questions/generate/${started.jobId}`);
+          pollingNetworkRetries = 0;
+        } catch (error) {
+          if (error instanceof ApiError || pollingNetworkRetries >= 5) throw error;
+          pollingNetworkRetries += 1;
+          setAiProgress((current) => current ? {
+            ...current,
+            message: `Connexion à l'API interrompue; nouvelle tentative ${pollingNetworkRetries}/5`,
+          } : current);
+          await new Promise((resolve) => setTimeout(resolve, 1000 * 2 ** (pollingNetworkRetries - 1)));
+          continue;
+        }
+        setAiProgress(progress);
+        if (progress.status === "completed") break;
+        if (progress.status === "failed") throw new Error(progress.error || progress.message);
+        await new Promise((resolve) => setTimeout(resolve, 1200));
+      }
+      const data = progress.result;
       setAi(data);
       await qc.invalidateQueries({ queryKey: ["admin-q"] });
       toast({ title: `${data.questions?.length ?? 0} questions enregistrees en brouillon` });
       setTab("list");
     } catch (e) {
-      toast({ title: (e as ApiError).message, variant: "destructive" });
+      toast({ title: e instanceof Error ? e.message : (e as ApiError).message, variant: "destructive" });
     } finally {
       setAiLoading(false);
     }
@@ -203,6 +250,32 @@ function QuestionsInner() {
             <Textarea className="min-h-[220px]" value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} />
           </div>
           <Button onClick={() => void generate()} isLoading={aiLoading}>Generer et enregistrer</Button>
+          {aiProgress && (aiLoading || aiProgress.status === "failed") && (
+            <div className="space-y-2" aria-live="polite">
+              <div className="flex items-center justify-between gap-3 text-sm">
+                <span>{aiProgress.status === "failed" ? aiProgress.error || aiProgress.message : aiProgress.message}</span>
+                <span className="font-medium tabular-nums">{Math.round(aiProgress.progress)}%</span>
+              </div>
+              <div
+                className="h-2 overflow-hidden rounded-full bg-muted"
+                role="progressbar"
+                aria-label="Progression de lecture du document"
+                aria-valuemin={0}
+                aria-valuemax={100}
+                aria-valuenow={Math.round(aiProgress.progress)}
+              >
+                <div
+                  className="h-full rounded-full bg-primary transition-[width] duration-500 ease-out"
+                  style={{ width: `${Math.min(100, Math.max(0, aiProgress.progress))}%` }}
+                />
+              </div>
+              {aiProgress.totalChunks > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Segment {aiProgress.currentChunk} sur {aiProgress.totalChunks}
+                </p>
+              )}
+            </div>
+          )}
           {ai && (
             <div className="space-y-3 border-t pt-4">
               <Label>Derniere generation</Label>
