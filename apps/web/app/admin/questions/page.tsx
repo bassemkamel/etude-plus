@@ -1,25 +1,21 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { RequireAuth } from "@/components/guards";
 import { Badge, Button, Card, FadeIn, Input, Label, PageHeader, Textarea } from "@/components/ui/Premium";
 import { LevelPicker } from "@/components/shared/LevelPicker";
 import { api, ApiError } from "@/lib/api";
 import { toast } from "@/components/ui/toast";
-import { getSubjectsForNiveauSection } from "@etudeplus/shared";
+import { getClassLevelLabel, getSubjectsForNiveauSection } from "@etudeplus/shared";
 
-const defaultPrompt = `Generate 10 multiple-choice questions from the uploaded course files.
-
-Return valid JSON only:
-[
-  {
-    "question": "What is ...?",
-    "options": ["A", "B", "C", "D"],
-    "answer": "A",
-    "marks_breakdown": "Why A is correct"
-  }
-]`;
+const AI_QUESTION_TYPES = [
+  { value: "QCM", label: "QCM" },
+  { value: "Exercice", label: "Exercice" },
+  { value: "Probleme", label: "Problème" },
+  { value: "Redaction", label: "Rédaction" },
+] as const;
 
 type AiGenerationProgress = {
   status: "preparing" | "reading" | "generating" | "saving" | "completed" | "failed";
@@ -37,12 +33,39 @@ type QuestionFormValues = {
   subject: string;
 };
 
+type CurriculumChapter = {
+  id: string;
+  levelCode: string;
+  sectionKey: string;
+  subject: string;
+  name: string;
+  isActive: boolean;
+};
+
 function hasValidEducationSelection(form: QuestionFormValues): boolean {
   return Boolean(
     form.gradeLevel &&
     form.subject &&
     getSubjectsForNiveauSection(form.gradeLevel, form.sectionKey || null).includes(form.subject),
   );
+}
+
+function getAvailableChapters(chapters: CurriculumChapter[], form: QuestionFormValues): CurriculumChapter[] {
+  return chapters.filter((chapter) =>
+    chapter.isActive &&
+    chapter.levelCode === form.gradeLevel &&
+    (chapter.sectionKey === "" || chapter.sectionKey === form.sectionKey) &&
+    chapter.subject === form.subject,
+  );
+}
+
+function hasValidChapterSelection(
+  form: QuestionFormValues & { topic: string },
+  chapters: CurriculumChapter[],
+): boolean {
+  if (!hasValidEducationSelection(form)) return false;
+  if (!form.topic) return false;
+  return getAvailableChapters(chapters, form).some((chapter) => chapter.name === form.topic);
 }
 
 function EducationFields({
@@ -90,19 +113,74 @@ function EducationFields({
   );
 }
 
+function ChapterField({
+  chapters,
+  value,
+  onChange,
+  form,
+  returnTab,
+}: {
+  chapters: CurriculumChapter[];
+  value: string;
+  onChange: (chapter: string) => void;
+  form: QuestionFormValues;
+  returnTab: "new" | "ai";
+}) {
+  const selectedChapter = chapters.some((chapter) => chapter.name === value) ? value : "";
+  const returnQuery = new URLSearchParams({
+    returnTab,
+    gradeLevel: form.gradeLevel,
+    sectionKey: form.sectionKey,
+    subject: form.subject,
+  }).toString();
+
+  return (
+    <div>
+      <Label>Chapitre</Label>
+      <select
+        className="h-11 w-full rounded-xl border-2 border-border px-3 disabled:cursor-not-allowed disabled:opacity-50"
+        value={selectedChapter}
+        disabled={!chapters.length}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <option value="">{chapters.length ? "Sélectionner un chapitre" : "Aucun chapitre disponible"}</option>
+        {chapters.map((chapter) => (
+          <option key={chapter.id} value={chapter.name}>{chapter.name}</option>
+        ))}
+      </select>
+      <p className="mt-1.5 text-xs text-muted-foreground">
+        Chapitre introuvable ?{" "}
+        <Link href={`/admin/curriculum?${returnQuery}`} className="font-medium text-primary underline underline-offset-2">
+          Créez-le dans le curriculum
+        </Link>
+        .
+      </p>
+    </div>
+  );
+}
+
 function QuestionsInner() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<"list" | "new" | "ai">("list");
+  const [selectedQuestionGroup, setSelectedQuestionGroup] = useState("");
+  useEffect(() => {
+    const returnTab = new URLSearchParams(window.location.search).get("tab");
+    if (returnTab === "new" || returnTab === "ai") setTab(returnTab);
+  }, []);
   const [status, setStatus] = useState("");
   const { data: questions = [] } = useQuery({
     queryKey: ["admin-q", status],
     queryFn: () => api<any[]>(`/api/v1/admin/questions${status ? `?status=${status}` : ""}`),
   });
+  const { data: chapters = [] } = useQuery({
+    queryKey: ["admin-chapters"],
+    queryFn: () => api<CurriculumChapter[]>("/api/v1/admin/curriculum/chapters"),
+  });
   const [form, setForm] = useState({
-    gradeLevel: "bac",
-    sectionKey: "mathematiques",
-    subject: "Mathématiques",
-    topic: "Nombres complexes",
+    gradeLevel: "",
+    sectionKey: "",
+    subject: "",
+    topic: "",
     type: "Exercice",
     difficulty: "moyen",
     questionText: "",
@@ -110,15 +188,30 @@ function QuestionsInner() {
     answer: "",
     status: "draft",
   });
+  const [educationPickerKey, setEducationPickerKey] = useState(0);
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has("gradeLevel") && params.has("sectionKey") && params.has("subject")) {
+      setForm((current) => ({
+        ...current,
+        gradeLevel: params.get("gradeLevel") ?? current.gradeLevel,
+        sectionKey: params.get("sectionKey") ?? current.sectionKey,
+        subject: params.get("subject") ?? current.subject,
+      }));
+      setEducationPickerKey((key) => key + 1);
+    }
+  }, []);
+  const availableChapters = getAvailableChapters(chapters, form);
   const [ai, setAi] = useState<any>(null);
   const [aiFiles, setAiFiles] = useState<File[]>([]);
-  const [aiPrompt, setAiPrompt] = useState(defaultPrompt);
+  const [aiQuestionCount, setAiQuestionCount] = useState(10);
+  const [aiQuestionTypes, setAiQuestionTypes] = useState<string[]>([]);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiProgress, setAiProgress] = useState<AiGenerationProgress | null>(null);
 
   async function save(origin = "manual", extra: any = {}) {
-    if (!hasValidEducationSelection(form)) {
-      toast({ title: "Choisissez un niveau, une section et une matière", variant: "destructive" });
+    if (!hasValidChapterSelection(form, chapters)) {
+      toast({ title: "Choisissez un niveau, une section, une matière et un chapitre existant", variant: "destructive" });
       return;
     }
     try {
@@ -159,8 +252,16 @@ function QuestionsInner() {
   }
 
   async function generate() {
-    if (!hasValidEducationSelection(form)) {
-      toast({ title: "Choisissez un niveau, une section et une matière", variant: "destructive" });
+    if (!hasValidChapterSelection(form, chapters)) {
+      toast({ title: "Choisissez un niveau, une section, une matière et un chapitre existant", variant: "destructive" });
+      return;
+    }
+    if (!Number.isInteger(aiQuestionCount) || aiQuestionCount < 1 || aiQuestionCount > 50) {
+      toast({ title: "Le nombre de questions doit être compris entre 1 et 50", variant: "destructive" });
+      return;
+    }
+    if (!aiQuestionTypes.length) {
+      toast({ title: "Sélectionnez au moins un type de question", variant: "destructive" });
       return;
     }
     if (!aiFiles.length) {
@@ -187,7 +288,8 @@ function QuestionsInner() {
         method: "POST",
         body: JSON.stringify({
           files,
-          prompt: aiPrompt,
+          count: aiQuestionCount,
+          types: aiQuestionTypes,
           gradeLevel: form.gradeLevel,
           sectionKey: form.sectionKey,
           subject: form.subject,
@@ -242,6 +344,23 @@ function QuestionsInner() {
     toast({ title: "Publiee" });
   }
 
+  const questionsByLevel = new Map<string, any[]>();
+  for (const question of questions) {
+    const key = JSON.stringify([question.gradeLevel ?? "", question.sectionKey ?? ""]);
+    const group = questionsByLevel.get(key) ?? [];
+    group.push(question);
+    questionsByLevel.set(key, group);
+  }
+  const questionGroups = Array.from(questionsByLevel, ([key, group]) => {
+    const [gradeLevel, sectionKey] = JSON.parse(key) as [string, string];
+    return {
+      key,
+      group,
+      label: getClassLevelLabel(gradeLevel, sectionKey || null),
+    };
+  });
+  const activeQuestionGroup = questionGroups.find((group) => group.key === selectedQuestionGroup) ?? questionGroups[0];
+
   return (
     <FadeIn>
       <PageHeader
@@ -256,31 +375,53 @@ function QuestionsInner() {
       />
       {tab === "list" && (
         <>
-          <select className="h-11 rounded-xl border-2 px-3 mb-4" value={status} onChange={(e) => setStatus(e.target.value)}>
-            <option value="">Tous statuts</option>
-            <option value="draft">draft</option>
-            <option value="published">published</option>
-          </select>
-          <div className="space-y-2">
-            {questions.map((q: any) => (
-              <Card key={q.id} className="p-4 flex justify-between gap-4">
-                <div>
-                  <p className="font-medium whitespace-pre-line">{q.questionText}</p>
-                  <p className="text-xs text-muted-foreground">{q.gradeLevel} - {q.subject} - {q.topic} - {q.origin}</p>
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  <Badge>{q.status}</Badge>
-                  {q.status !== "published" && <Button size="sm" onClick={() => void publish(q.id)}>Publier</Button>}
-                </div>
-              </Card>
-            ))}
+          <div className="flex flex-wrap gap-3 mb-4">
+            <select className="h-11 rounded-xl border-2 px-3" value={status} onChange={(e) => setStatus(e.target.value)}>
+              <option value="">Tous statuts</option>
+              <option value="draft">draft</option>
+              <option value="published">published</option>
+            </select>
+            <select
+              className="h-11 min-w-64 rounded-xl border-2 px-3"
+              value={activeQuestionGroup?.key ?? ""}
+              disabled={!questionGroups.length}
+              onChange={(event) => setSelectedQuestionGroup(event.target.value)}
+              aria-label="Filtrer par niveau et section"
+            >
+              {!questionGroups.length && <option value="">Aucun groupe disponible</option>}
+              {questionGroups.map((group) => (
+                <option key={group.key} value={group.key}>{group.label} ({group.group.length})</option>
+              ))}
+            </select>
           </div>
+          {activeQuestionGroup ? (
+            <section className="space-y-2">
+              <div className="flex items-baseline justify-between gap-3 border-b border-border pb-2">
+                <h2 className="font-semibold">{activeQuestionGroup.label}</h2>
+                <span className="text-xs text-muted-foreground">{activeQuestionGroup.group.length} question(s)</span>
+              </div>
+              {activeQuestionGroup.group.map((q: any) => (
+                <Card key={q.id} className="p-4 flex justify-between gap-4">
+                  <div>
+                    <p className="font-medium whitespace-pre-line">{q.questionText}</p>
+                    <p className="text-xs text-muted-foreground">{q.subject} - {q.topic} - {q.origin}</p>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Badge>{q.status}</Badge>
+                    {q.status !== "published" && <Button size="sm" onClick={() => void publish(q.id)}>Publier</Button>}
+                  </div>
+                </Card>
+              ))}
+            </section>
+          ) : (
+            <p className="text-sm text-muted-foreground">Aucune question pour ce statut.</p>
+          )}
         </>
       )}
       {tab === "new" && (
         <Card className="p-6 grid sm:grid-cols-2 gap-3 max-w-3xl">
-          <EducationFields form={form} onChange={(values) => setForm({ ...form, ...values })} />
-          <div><Label>Chapitre</Label><Input value={form.topic} onChange={(e) => setForm({ ...form, topic: e.target.value })} /></div>
+          <EducationFields key={educationPickerKey} form={form} onChange={(values) => setForm({ ...form, ...values })} />
+          <ChapterField chapters={availableChapters} value={form.topic} onChange={(topic) => setForm({ ...form, topic })} form={form} returnTab="new" />
           <div className="sm:col-span-2"><Label>Enonce</Label><Textarea value={form.questionText} onChange={(e) => setForm({ ...form, questionText: e.target.value })} /></div>
           <div className="sm:col-span-2"><Label>Partie a</Label><Input value={form.partText} onChange={(e) => setForm({ ...form, partText: e.target.value })} /></div>
           <div className="sm:col-span-2"><Label>Reponse / bareme</Label><Input value={form.answer} onChange={(e) => setForm({ ...form, answer: e.target.value })} /></div>
@@ -294,8 +435,8 @@ function QuestionsInner() {
         <Card className="p-6 max-w-3xl space-y-4">
           <p className="text-sm text-muted-foreground">Les questions generees depuis les PDF sont enregistrees en brouillon.</p>
           <div className="grid sm:grid-cols-2 gap-3">
-            <EducationFields form={form} onChange={(values) => setForm({ ...form, ...values })} />
-            <div><Label>Chapitre</Label><Input value={form.topic} onChange={(e) => setForm({ ...form, topic: e.target.value })} /></div>
+            <EducationFields key={educationPickerKey} form={form} onChange={(values) => setForm({ ...form, ...values })} />
+            <ChapterField chapters={availableChapters} value={form.topic} onChange={(topic) => setForm({ ...form, topic })} form={form} returnTab="ai" />
           </div>
           <div>
             <Label>Fichiers PDF</Label>
@@ -310,9 +451,38 @@ function QuestionsInner() {
               <p className="text-xs text-muted-foreground mt-2">{aiFiles.map((file) => file.name).join(", ")}</p>
             )}
           </div>
-          <div>
-            <Label>Prompt</Label>
-            <Textarea className="min-h-[220px]" value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} />
+          <div className="grid sm:grid-cols-2 gap-4">
+            <div>
+              <Label>Nombre de questions</Label>
+              <Input
+                type="number"
+                min={1}
+                max={50}
+                step={1}
+                value={aiQuestionCount}
+                onChange={(event) => setAiQuestionCount(Number(event.target.value))}
+              />
+            </div>
+            <fieldset className="space-y-2">
+              <legend className="text-sm font-medium">Types de questions</legend>
+              <div className="grid grid-cols-2 gap-2">
+                {AI_QUESTION_TYPES.map(({ value, label }) => (
+                  <label key={value} className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="h-4 w-4 accent-primary"
+                      checked={aiQuestionTypes.includes(value)}
+                      onChange={(event) => setAiQuestionTypes((selected) =>
+                        event.target.checked
+                          ? [...selected, value]
+                          : selected.filter((type) => type !== value),
+                      )}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
           </div>
           <Button onClick={() => void generate()} isLoading={aiLoading}>Generer et enregistrer</Button>
           {aiProgress && (aiLoading || aiProgress.status === "failed") && (

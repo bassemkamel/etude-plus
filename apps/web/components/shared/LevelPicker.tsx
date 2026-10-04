@@ -22,7 +22,7 @@ interface LevelPickerProps {
 }
 
 function detectCycle(niveauKey: string): Cycle {
-  if (!niveauKey) return ENABLED_CYCLES[0] ?? null;
+  if (!niveauKey) return ENABLED_CYCLES.length === 1 ? ENABLED_CYCLES[0] ?? null : null;
   if (["7eme", "8eme", "9eme"].includes(niveauKey)) {
     return isCycleEnabled("college") ? "college" : (ENABLED_CYCLES[0] ?? null);
   }
@@ -93,7 +93,7 @@ export function LevelPicker({ niveauValue, sectionValue, onChange, className }: 
   // Cycle buttons — only the ones enabled in ENABLED_CYCLES
   const visibleCycles = [
     { id: "college" as const, label: "Collège", sub: "7ème – 9ème de base" },
-    { id: "lycee"   as const, label: "Lycée",   sub: "1ère année – Bac" },
+    { id: "lycee" as const, label: "Lycée", sub: "1ère année – Bac" },
   ].filter(c => isCycleEnabled(c.id));
 
   return (
@@ -135,7 +135,7 @@ export function LevelPicker({ niveauValue, sectionValue, onChange, className }: 
             { yr: "1ere" as LyceeYear, label: "1ère année" },
             { yr: "2eme" as LyceeYear, label: "2ème année" },
             { yr: "3eme" as LyceeYear, label: "3ème année" },
-            { yr: "bac"  as LyceeYear, label: "Baccalauréat" },
+            { yr: "bac" as LyceeYear, label: "Baccalauréat" },
           ]).map(({ yr, label }) =>
             btn(
               lyceeYear === yr && (yr !== "1ere" || niveauValue === "1ere_secondaire"),

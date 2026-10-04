@@ -12,6 +12,10 @@ type AiSourceFile = {
     data: string;
 };
 
+type AiQuestionType = "Exercice" | "QCM" | "Probleme" | "Redaction";
+
+const AI_QUESTION_TYPES: readonly AiQuestionType[] = ["Exercice", "QCM", "Probleme", "Redaction"];
+
 type AiGeneratedQuestion = {
     question?: string;
     question_text?: string;
@@ -21,6 +25,8 @@ type AiGeneratedQuestion = {
     topic?: string;
     difficulty?: string;
     type?: string;
+    parts?: Array<{ label?: string; text?: string; marks?: number }>;
+    mark_schemes?: Array<{ part_label?: string; partLabel?: string; answer?: string; marks_breakdown?: string; marksBreakdown?: string }>;
 };
 
 type AiSourceChunk = {
@@ -163,6 +169,22 @@ function formatAiQuestionText(item: AiGeneratedQuestion) {
     const options = Array.isArray(item.options) ? item.options.filter(Boolean) : [];
     if (!options.length) return question;
     return `${question}\n\n${options.map((option, index) => `${String.fromCharCode(65 + index)}. ${option}`).join("\n")}`;
+}
+
+function normalizeAiQuestionType(type: string | undefined, options: string[]): "Exercice" | "QCM" | "Probleme" | "Redaction" {
+    const normalized = (type ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+    if (normalized === "qcm" || normalized === "multiple choice") return "QCM";
+    if (normalized === "probleme" || normalized === "problem") return "Probleme";
+    if (normalized === "redaction" || normalized === "essay") return "Redaction";
+    if (normalized === "exercice" || normalized === "exercise") return "Exercice";
+    return options.length ? "QCM" : "Exercice";
+}
+
+function normalizeAiDifficulty(difficulty: string | undefined, fallback: string): "facile" | "moyen" | "difficile" {
+    const normalized = (difficulty ?? fallback).normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+    if (normalized === "facile" || normalized === "easy") return "facile";
+    if (normalized === "difficile" || normalized === "hard") return "difficile";
+    return "moyen";
 }
 
 @Injectable()
@@ -447,7 +469,37 @@ export class AdminService {
         return q;
     }
 
-    startQuestionGeneration(actor: AuthedUser, ip: string, body: any) {
+    async startQuestionGeneration(actor: AuthedUser, ip: string, body: any) {
+        const gradeLevel = String(body.gradeLevel ?? "bac");
+        const sectionKey = String(body.sectionKey ?? "");
+        const subject = String(body.subject ?? "Mathématiques");
+        const topic = String(body.topic ?? "").trim();
+        const count = Number(body.count);
+        const submittedTypes: unknown[] = Array.isArray(body.types) ? body.types : [];
+        if (!Number.isInteger(count) || count < 1 || count > 50) {
+            apiError(HttpStatus.BAD_REQUEST, "QUESTION_COUNT_INVALID", "Le nombre de questions doit être compris entre 1 et 50.");
+        }
+        if (!submittedTypes.length || submittedTypes.some((type) => typeof type !== "string" || !AI_QUESTION_TYPES.includes(type as AiQuestionType))) {
+            apiError(HttpStatus.BAD_REQUEST, "QUESTION_TYPES_INVALID", "Sélectionnez au moins un type de question valide.");
+        }
+        const types = [...new Set(submittedTypes as AiQuestionType[])];
+        if (types.length !== submittedTypes.length) {
+            apiError(HttpStatus.BAD_REQUEST, "QUESTION_TYPES_INVALID", "Chaque type de question ne peut être sélectionné qu'une seule fois.");
+        }
+        if (!topic) apiError(HttpStatus.BAD_REQUEST, "CHAPTER_REQUIRED", "Choisissez un chapitre avant de générer les questions.");
+        const chapter = await this.prisma.curriculumChapter.findFirst({
+            where: {
+                isActive: true,
+                levelCode: gradeLevel,
+                sectionKey: { in: ["", sectionKey] },
+                subject,
+                name: topic,
+            },
+            select: { id: true },
+        });
+        if (!chapter) apiError(HttpStatus.BAD_REQUEST, "CHAPTER_INVALID", "Le chapitre choisi n'existe pas pour ce niveau, cette section et cette matière.");
+        const generationRequest = { ...body, gradeLevel, sectionKey, subject, topic, count, types };
+
         if (process.env.ENABLE_AI !== "true") {
             return {
                 persisted: false,
@@ -456,15 +508,13 @@ export class AdminService {
                     parts: [{ label: "a", text: "Question principale", marks: 4 }],
                     mark_scheme: [{ label: "a", answer: "Réponse à compléter", marks_breakdown: "4 pts" }],
                     difficulty: body.difficulty ?? "moyen",
-                    type: body.type ?? "Exercice",
+                    type: types[0],
                     estimated_time_minutes: 10,
                 }],
             };
         }
         const files = Array.isArray(body.files) ? (body.files as AiSourceFile[]) : [];
         if (!files.length) apiError(HttpStatus.BAD_REQUEST, "FILES_REQUIRED", "Ajoutez au moins un fichier PDF.");
-        const prompt = String(body.prompt ?? "").trim();
-        if (prompt.length < 20) apiError(HttpStatus.BAD_REQUEST, "PROMPT_REQUIRED", "Prompt trop court.");
 
         cleanExpiredAiJobs();
         const jobId = randomUUID();
@@ -477,7 +527,7 @@ export class AdminService {
             totalChunks: 0,
             updatedAt: Date.now(),
         });
-        void this.runQuestionGeneration(actor, ip, body, jobId).catch((error: unknown) => {
+        void this.runQuestionGeneration(actor, ip, generationRequest, jobId).catch((error: unknown) => {
             const job = aiGenerationJobs.get(jobId);
             if (!job) return;
             const response = error instanceof Error && "getResponse" in error ? (error as any).getResponse() : null;
@@ -515,12 +565,13 @@ export class AdminService {
             if (job) Object.assign(job, updates, { updatedAt: Date.now() });
         };
         const files = body.files as AiSourceFile[];
-        const prompt = String(body.prompt ?? "").trim();
         const meta = {
             gradeLevel: String(body.gradeLevel ?? "bac"),
             sectionKey: String(body.sectionKey ?? ""),
             subject: String(body.subject ?? "Mathématiques"),
-            topic: String(body.topic ?? "Général"),
+            topic: String(body.topic).trim(),
+            count: Number(body.count),
+            types: body.types as AiQuestionType[],
             difficulty: String(body.difficulty ?? "moyen"),
             status: String(body.status ?? "draft"),
             language: String(body.language ?? "Français"),
@@ -585,7 +636,12 @@ export class AdminService {
         };
 
         updateJob({ status: "generating", progress: 84, message: "Génération des questions" });
-        const response = await generateContent(`${prompt}\n\nUse the following consolidated notes from the complete source document(s). Treat them as the authoritative context across all page ranges. Do not claim details that are not present in the notes.\n\nComplete document notes:\n${documentContext}\n\nReturn valid JSON only. Use this array shape:\n[{"question":"Question text","options":["A","B","C","D"],"answer":"Correct answer","marks_breakdown":"Short explanation or grading notes"}]\nDo not include markdown fences.`, 8192, "final question generation", "", true);
+        const chapterInstruction = `Generate every question only about the selected chapter "${meta.topic}". Set the topic field of every item to exactly "${meta.topic}". Do not use other chapters.`;
+        const typeInstruction = meta.types.length === 1
+            ? `Generate all questions as ${meta.types[0]}.`
+            : `Use only these requested types: ${meta.types.join(", ")}. Distribute them as evenly as possible; use each type at least once when the requested count allows.`;
+        const prompt = `Generate exactly ${meta.count} questions from the source documents. ${typeInstruction}\n\n${chapterInstruction}\n\nMandatory output contract: return only a valid JSON array, with no markdown fences or surrounding text. Every item must match this structure:\n{"question":"Question statement","topic":"${meta.topic}","type":"${meta.types[0]}","difficulty":"moyen","parts":[{"label":"a","text":"Question or sub-question","marks":2}],"mark_schemes":[{"part_label":"a","answer":"Expected answer","marks_breakdown":"Grading details"}],"options":["Choice A","Choice B"]}\nThe type field must be exactly one of these values: ${meta.types.map((type) => `"${type}"`).join(", ")}. The type in the example is illustrative only. For QCM, include at least two options and put the correct choice in the matching mark_schemes answer. For Exercice, Probleme, and Redaction, provide meaningful parts and corresponding mark schemes; omit options unless explicitly needed. Each part needs a label, text, and positive numeric marks; each mark scheme needs a matching part_label and answer. Use this difficulty for every question: ${meta.difficulty}. Treat the source documents as authoritative; do not invent content.\n\nSource documents:\n${documentContext}`;
+        const response = await generateContent(prompt, 8192, "final question generation", "", true);
         const raw = response.text ?? "";
         let generated: AiGeneratedQuestion[];
         try {
@@ -594,13 +650,57 @@ export class AdminService {
             apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_JSON_INVALID", "La reponse IA n'est pas un JSON valide.");
         }
         if (!generated!.length) apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_EMPTY", "Aucune question generee.");
+        if (generated!.length !== meta.count) {
+            apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_COUNT_MISMATCH", `L'IA a renvoyé ${generated!.length} question(s) au lieu de ${meta.count}.`);
+        }
 
         updateJob({ status: "saving", progress: 92, message: "Enregistrement des questions" });
         const saved = [];
         for (const item of generated!) {
             const questionText = formatAiQuestionText(item);
             if (!questionText) continue;
-            const answer = String(item.answer ?? "").trim();
+            const options = Array.isArray(item.options) ? item.options.filter(Boolean) : [];
+            const type = normalizeAiQuestionType(item.type, options);
+            if (!meta.types.includes(type)) {
+                apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_TYPE_NOT_SELECTED", `L'IA a renvoyé le type ${type}, qui n'a pas été sélectionné.`);
+            }
+            const parts = (Array.isArray(item.parts) ? item.parts : [])
+                .filter((part) => String(part.text ?? "").trim())
+                .map((part, index) => ({
+                    label: String(part.label ?? String.fromCharCode(97 + index)),
+                    text: String(part.text).trim(),
+                    marks: Number.isFinite(Number(part.marks)) && Number(part.marks) > 0 ? Number(part.marks) : 1,
+                    orderIndex: index,
+                }));
+            const savedParts = parts.length ? parts : [{
+                label: "a",
+                text: options.length ? "Choisissez la bonne réponse." : questionText,
+                marks: 1,
+                orderIndex: 0,
+            }];
+            const suppliedMarkSchemes = Array.isArray(item.mark_schemes) ? item.mark_schemes : [];
+            const markSchemes = suppliedMarkSchemes
+                .map((scheme, index) => ({
+                    partLabel: String(scheme.part_label ?? scheme.partLabel ?? savedParts[index]?.label ?? "a"),
+                    answer: String(scheme.answer ?? "").trim(),
+                    marksBreakdown: scheme.marks_breakdown ?? scheme.marksBreakdown ?? null,
+                    orderIndex: index,
+                }))
+                .filter((scheme) => scheme.answer);
+            if (!markSchemes.length) {
+                const answer = String(item.answer ?? "").trim();
+                if (answer) {
+                    markSchemes.push({
+                        partLabel: savedParts[0].label,
+                        answer,
+                        marksBreakdown: item.marks_breakdown ?? null,
+                        orderIndex: 0,
+                    });
+                }
+            }
+            if (type === "QCM" && options.length < 2) {
+                apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_QCM_OPTIONS_MISSING", "Une question QCM doit contenir au moins deux choix.");
+            }
             const question = await this.prisma.question.create({
                 data: {
                     origin: "ai_admin",
@@ -609,17 +709,17 @@ export class AdminService {
                     gradeLevel: meta.gradeLevel,
                     sectionKey: meta.sectionKey,
                     subject: meta.subject,
-                    topic: item.topic ?? meta.topic,
-                    type: (item.type ?? (Array.isArray(item.options) && item.options.length ? "QCM" : "Exercice")) as any,
-                    difficulty: (item.difficulty ?? meta.difficulty) as any,
+                    topic: meta.topic,
+                    type,
+                    difficulty: normalizeAiDifficulty(item.difficulty, meta.difficulty),
                     language: meta.language,
                     questionText,
                     context: `AI generated from: ${files.map((file) => file.name).join(", ")}`,
-                    totalMarks: 1,
+                    totalMarks: savedParts.reduce((total, part) => total + part.marks, 0),
                     estimatedTimeMinutes: 2,
                     publishedAt: meta.status === "published" ? new Date() : null,
-                    parts: { create: [{ label: "a", text: questionText, marks: 1, orderIndex: 0 }] },
-                    markSchemes: { create: [{ partLabel: "a", answer, marksBreakdown: item.marks_breakdown ?? answer, orderIndex: 0 }] },
+                    parts: { create: savedParts },
+                    markSchemes: { create: markSchemes },
                 },
                 include: { parts: true, markSchemes: true },
             });
