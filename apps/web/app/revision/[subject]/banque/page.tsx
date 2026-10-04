@@ -88,14 +88,8 @@ function Player() {
             <Badge variant="secondary">{q.difficulty}</Badge>
             <Badge variant="outline">{q.topic}</Badge>
           </div>
-          <p className="text-lg font-medium leading-relaxed">{q.questionText}</p>
-          <div className="mt-4 space-y-2">
-            {q.parts.map((p) => (
-              <div key={p.id} className="text-sm">
-                <span className="font-bold">{p.label}.</span> {p.text} <span className="text-muted-foreground">({p.marks} pts)</span>
-              </div>
-            ))}
-          </div>
+          <p className="text-lg font-medium leading-relaxed whitespace-pre-line">{q.questionText}</p>
+
           {revealed && (
             <div className="mt-6 p-4 rounded-xl bg-green-50 border border-green-200">
               <p className="text-sm font-semibold mb-1">Barème</p>

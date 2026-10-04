@@ -166,7 +166,11 @@ function parseAiQuestions(text: string): AiGeneratedQuestion[] {
 
 function formatAiQuestionText(item: AiGeneratedQuestion) {
     const question = String(item.question ?? item.question_text ?? "").trim();
-    const options = Array.isArray(item.options) ? item.options.filter(Boolean) : [];
+    const options = Array.isArray(item.options)
+        ? item.options
+            .map((option) => String(option).trim().replace(/^[A-Z]\s*[.)\-:]\s*/i, ""))
+            .filter(Boolean)
+        : [];
     if (!options.length) return question;
     return `${question}\n\n${options.map((option, index) => `${String.fromCharCode(65 + index)}. ${option}`).join("\n")}`;
 }
@@ -640,7 +644,10 @@ export class AdminService {
         const typeInstruction = meta.types.length === 1
             ? `Generate all questions as ${meta.types[0]}.`
             : `Use only these requested types: ${meta.types.join(", ")}. Distribute them as evenly as possible; use each type at least once when the requested count allows.`;
-        const prompt = `Generate exactly ${meta.count} questions from the source documents. ${typeInstruction}\n\n${chapterInstruction}\n\nMandatory output contract: return only a valid JSON array, with no markdown fences or surrounding text. Every item must match this structure:\n{"question":"Question statement","topic":"${meta.topic}","type":"${meta.types[0]}","difficulty":"moyen","parts":[{"label":"a","text":"Question or sub-question","marks":2}],"mark_schemes":[{"part_label":"a","answer":"Expected answer","marks_breakdown":"Grading details"}],"options":["Choice A","Choice B"]}\nThe type field must be exactly one of these values: ${meta.types.map((type) => `"${type}"`).join(", ")}. The type in the example is illustrative only. For QCM, include at least two options and put the correct choice in the matching mark_schemes answer. For Exercice, Probleme, and Redaction, provide meaningful parts and corresponding mark schemes; omit options unless explicitly needed. Each part needs a label, text, and positive numeric marks; each mark scheme needs a matching part_label and answer. Use this difficulty for every question: ${meta.difficulty}. Treat the source documents as authoritative; do not invent content.\n\nSource documents:\n${documentContext}`;
+        const qcmFormattingInstruction = meta.types.includes("QCM")
+            ? "For every QCM, put only the question statement in the question field. Put each answer choice as a separate plain string in the options array; do not include choice labels like A. or B., and do not put choices in the question field. The server will store the statement, a blank line, then one labeled choice per line."
+            : "";
+        const prompt = `Generate exactly ${meta.count} questions from the source documents. ${typeInstruction}\n\n${chapterInstruction}\n\n${qcmFormattingInstruction}\n\nMandatory output contract: return only a valid JSON array, with no markdown fences or surrounding text. Every item must match this structure:\n{"question":"Question statement","topic":"${meta.topic}","type":"${meta.types[0]}","difficulty":"moyen","parts":[{"label":"a","text":"Question or sub-question","marks":2}],"mark_schemes":[{"part_label":"a","answer":"Expected answer","marks_breakdown":"Grading details"}],"options":["Choice A","Choice B"]}\nThe type field must be exactly one of these values: ${meta.types.map((type) => `"${type}"`).join(", ")}. The type in the example is illustrative only. For QCM, include at least two options and put the correct choice in the matching mark_schemes answer. For Exercice, Probleme, and Redaction, provide meaningful parts and corresponding mark schemes; omit options unless explicitly needed. Each part needs a label, text, and positive numeric marks; each mark scheme needs a matching part_label and answer. Use this difficulty for every question: ${meta.difficulty}. Treat the source documents as authoritative; do not invent content.\n\nSource documents:\n${documentContext}`;
         const response = await generateContent(prompt, 8192, "final question generation", "", true);
         const raw = response.text ?? "";
         let generated: AiGeneratedQuestion[];
