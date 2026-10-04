@@ -77,6 +77,12 @@ npx pnpm@10.32.1 dev:api    # http://localhost:3001/healthz  ·  /api/docs
 npx pnpm@10.32.1 dev:web    # http://localhost:3000
 ```
 
+## AI question generation with Ollama
+
+For local development, set `ENABLE_AI=true` and configure `OLLAMA_BASE_URL` (default `http://127.0.0.1:11434`) plus `OLLAMA_MODEL`. The API sends PDF text to Ollama in page chunks (`OLLAMA_PDF_CHUNK_PAGES`, default 20) and carries a running summary forward. Restart the API after changing `.env`.
+
+`gemma4:31b-cloud` uses Ollama's hosted cloud service; it is not fully local inference. To run inference on your own machine, install/pull a model supported by your hardware and set `OLLAMA_MODEL` to that exact local model tag. Ollama must be reachable from the API process. Scanned PDFs without a text layer currently need OCR before they can be processed by Ollama.
+
 ---
 
 ## Commandes utiles

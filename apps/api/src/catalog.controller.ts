@@ -4,15 +4,45 @@ import { Prisma } from "@prisma/client";
 import { PrismaService } from "./prisma.service";
 import { AuthGuard, Roles, RolesGuard, type AuthedUser } from "./common/guards";
 import { apiError } from "./common/errors";
-import { getClassLevelLabel, getSubjectsForNiveauSection } from "./lib/education-config";
+import { ALL_SUBJECTS, SECTION_LEVELS, getClassLevelLabel, getSubjectsForNiveauSection, subjectFromSlug } from "./lib/education-config";
 
 function hasFullAccess(features: any) {
   return Boolean(features?.questionBank);
 }
 
+function normalizeForComparison(value: string | null | undefined): string {
+  return (value ?? "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[_\-\s]+/g, " ")
+    .replace(/[^a-zA-Z0-9 ]/g, "")
+    .trim()
+    .toLowerCase();
+}
+
+function getEquivalentValues(input: string | null | undefined, allowedValues: readonly string[]): string[] {
+  const base = (input ?? "").trim();
+  if (!base) return [];
+
+  const normalizedTarget = normalizeForComparison(base);
+  const matches = new Set<string>();
+  matches.add(base);
+
+  for (const value of allowedValues) {
+    if (normalizeForComparison(value) === normalizedTarget) {
+      matches.add(value);
+    }
+  }
+
+  const resolvedSlug = subjectFromSlug(base) ?? subjectFromSlug(base.toLowerCase()) ?? subjectFromSlug(base.replace(/\s+/g, "-"));
+  if (resolvedSlug) matches.add(resolvedSlug);
+
+  return [...matches];
+}
+
 @Controller()
 export class CatalogController {
-  constructor(private prisma: PrismaService) {}
+  constructor(private prisma: PrismaService) { }
 
   @Get("plans")
   async plans() {
@@ -100,15 +130,23 @@ export class CatalogController {
     const profile = await this.prisma.studentProfile.findUnique({ where: { userId: req.user.id } });
     if (!profile?.gradeLevel) return [];
     const sectionKey = profile.educationSection || "";
+
+    const matchingSections = getEquivalentValues(sectionKey, Object.keys(SECTION_LEVELS).flatMap((level) => Object.keys(SECTION_LEVELS[level as keyof typeof SECTION_LEVELS].sections)));
+    const matchingSubjects = subject ? getEquivalentValues(subject, ALL_SUBJECTS) : [];
+
     const where: Prisma.QuestionWhereInput = {
       status: "published",
       origin: { in: ["manual", "ai_admin"] },
       ownerUserId: null,
       deletedAt: null,
       gradeLevel: profile.gradeLevel,
-      OR: [{ sectionKey: "" }, { sectionKey }],
+      ...(sectionKey
+        ? { sectionKey: { in: ["", ...matchingSections] } }
+        : { sectionKey: "" }),
     };
-    if (subject) where.subject = subject;
+    if (matchingSubjects.length) {
+      where.OR = matchingSubjects.map((value) => ({ subject: { equals: value, mode: "insensitive" } }));
+    }
     if (topic) where.topic = topic;
     const items = await this.prisma.question.findMany({
       where,
@@ -116,10 +154,8 @@ export class CatalogController {
       orderBy: { createdAt: "desc" },
       take: 50,
     });
-    const sub = await this.currentSub(req.user.id);
-    const full = hasFullAccess(sub?.plan.features);
-    if (full) return items;
-    return items.slice(0, 3).map((q) => ({ ...q, preview: true }));
+    console.log('items', items)
+    return items;
   }
 
   @Get("revision/flashcards")
@@ -128,18 +164,20 @@ export class CatalogController {
     const profile = await this.prisma.studentProfile.findUnique({ where: { userId: req.user.id } });
     if (!profile?.gradeLevel) return [];
     const sectionKey = profile.educationSection || "";
+    const matchingSections = getEquivalentValues(sectionKey, Object.keys(SECTION_LEVELS).flatMap((level) => Object.keys(SECTION_LEVELS[level as keyof typeof SECTION_LEVELS].sections)));
+    const matchingSubjects = subject ? getEquivalentValues(subject, ALL_SUBJECTS) : [];
     const items = await this.prisma.flashcard.findMany({
       where: {
         status: "live",
         gradeLevel: profile.gradeLevel,
-        OR: [{ sectionKey: "" }, { sectionKey }],
-        ...(subject ? { subject } : {}),
+        ...(sectionKey
+          ? { sectionKey: { in: ["", ...matchingSections] } }
+          : { sectionKey: "" }),
+        ...(matchingSubjects.length ? { subject: { in: matchingSubjects } } : {}),
       },
       take: 80,
     });
-    const sub = await this.currentSub(req.user.id);
-    if (hasFullAccess(sub?.plan.features)) return items;
-    return items.slice(0, 3).map((x) => ({ ...x, preview: true }));
+    return items;
   }
 
   @Get("revision/annales")
@@ -148,17 +186,19 @@ export class CatalogController {
     const profile = await this.prisma.studentProfile.findUnique({ where: { userId: req.user.id } });
     if (!profile?.gradeLevel) return [];
     const sectionKey = profile.educationSection || "";
+    const matchingSections = getEquivalentValues(sectionKey, Object.keys(SECTION_LEVELS).flatMap((level) => Object.keys(SECTION_LEVELS[level as keyof typeof SECTION_LEVELS].sections)));
+    const matchingSubjects = subject ? getEquivalentValues(subject, ALL_SUBJECTS) : [];
     const items = await this.prisma.annale.findMany({
       where: {
         status: "live",
         gradeLevel: profile.gradeLevel,
-        OR: [{ sectionKey: "" }, { sectionKey }],
-        ...(subject ? { subject } : {}),
+        ...(sectionKey
+          ? { sectionKey: { in: ["", ...matchingSections] } }
+          : { sectionKey: "" }),
+        ...(matchingSubjects.length ? { subject: { in: matchingSubjects } } : {}),
       },
     });
-    const sub = await this.currentSub(req.user.id);
-    if (hasFullAccess(sub?.plan.features)) return items;
-    return items.slice(0, 3).map((x) => ({ ...x, preview: true }));
+    return items;
   }
 
   @Post("revision/attempts")
