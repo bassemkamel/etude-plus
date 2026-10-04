@@ -4,8 +4,10 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { RequireAuth } from "@/components/guards";
 import { Badge, Button, Card, FadeIn, Input, Label, PageHeader, Textarea } from "@/components/ui/Premium";
+import { LevelPicker } from "@/components/shared/LevelPicker";
 import { api, ApiError } from "@/lib/api";
 import { toast } from "@/components/ui/toast";
+import { getSubjectsForNiveauSection } from "@etudeplus/shared";
 
 const defaultPrompt = `Generate 10 multiple-choice questions from the uploaded course files.
 
@@ -29,6 +31,65 @@ type AiGenerationProgress = {
   error?: string;
 };
 
+type QuestionFormValues = {
+  gradeLevel: string;
+  sectionKey: string;
+  subject: string;
+};
+
+function hasValidEducationSelection(form: QuestionFormValues): boolean {
+  return Boolean(
+    form.gradeLevel &&
+    form.subject &&
+    getSubjectsForNiveauSection(form.gradeLevel, form.sectionKey || null).includes(form.subject),
+  );
+}
+
+function EducationFields({
+  form,
+  onChange,
+}: {
+  form: QuestionFormValues;
+  onChange: (values: QuestionFormValues) => void;
+}) {
+  const subjects = getSubjectsForNiveauSection(form.gradeLevel, form.sectionKey || null);
+  const selectedSubject = subjects.includes(form.subject) ? form.subject : "";
+
+  return (
+    <>
+      <div className="sm:col-span-2">
+        <Label>Niveau et section</Label>
+        <LevelPicker
+          niveauValue={form.gradeLevel}
+          sectionValue={form.sectionKey || null}
+          onChange={(gradeLevel, sectionKey) => {
+            const nextSubjects = getSubjectsForNiveauSection(gradeLevel, sectionKey);
+            onChange({
+              gradeLevel,
+              sectionKey: sectionKey ?? "",
+              subject: nextSubjects[0] ?? "",
+            });
+          }}
+        />
+      </div>
+      <div>
+        <Label>Matière</Label>
+        <select
+          className="h-11 w-full rounded-xl border-2 border-border px-3 disabled:cursor-not-allowed disabled:opacity-50"
+          value={selectedSubject}
+          disabled={!subjects.length}
+          onChange={(event) => onChange({ ...form, subject: event.target.value })}
+        >
+          <option value="">Sélectionner une matière</option>
+          {subjects.map((subject) => (
+            <option key={subject} value={subject}>{subject}</option>
+          ))}
+        </select>
+      </div>
+    </>
+  );
+}
+
 function QuestionsInner() {
   const qc = useQueryClient();
   const [tab, setTab] = useState<"list" | "new" | "ai">("list");
@@ -40,7 +101,7 @@ function QuestionsInner() {
   const [form, setForm] = useState({
     gradeLevel: "bac",
     sectionKey: "mathematiques",
-    subject: "Mathematiques",
+    subject: "Mathématiques",
     topic: "Nombres complexes",
     type: "Exercice",
     difficulty: "moyen",
@@ -56,6 +117,10 @@ function QuestionsInner() {
   const [aiProgress, setAiProgress] = useState<AiGenerationProgress | null>(null);
 
   async function save(origin = "manual", extra: any = {}) {
+    if (!hasValidEducationSelection(form)) {
+      toast({ title: "Choisissez un niveau, une section et une matière", variant: "destructive" });
+      return;
+    }
     try {
       await api("/api/v1/admin/questions", {
         method: "POST",
@@ -94,6 +159,10 @@ function QuestionsInner() {
   }
 
   async function generate() {
+    if (!hasValidEducationSelection(form)) {
+      toast({ title: "Choisissez un niveau, une section et une matière", variant: "destructive" });
+      return;
+    }
     if (!aiFiles.length) {
       toast({ title: "Ajoutez au moins un PDF", variant: "destructive" });
       return;
@@ -210,9 +279,7 @@ function QuestionsInner() {
       )}
       {tab === "new" && (
         <Card className="p-6 grid sm:grid-cols-2 gap-3 max-w-3xl">
-          <div><Label>Niveau</Label><Input value={form.gradeLevel} onChange={(e) => setForm({ ...form, gradeLevel: e.target.value })} /></div>
-          <div><Label>Section</Label><Input value={form.sectionKey} onChange={(e) => setForm({ ...form, sectionKey: e.target.value })} /></div>
-          <div><Label>Matiere</Label><Input value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} /></div>
+          <EducationFields form={form} onChange={(values) => setForm({ ...form, ...values })} />
           <div><Label>Chapitre</Label><Input value={form.topic} onChange={(e) => setForm({ ...form, topic: e.target.value })} /></div>
           <div className="sm:col-span-2"><Label>Enonce</Label><Textarea value={form.questionText} onChange={(e) => setForm({ ...form, questionText: e.target.value })} /></div>
           <div className="sm:col-span-2"><Label>Partie a</Label><Input value={form.partText} onChange={(e) => setForm({ ...form, partText: e.target.value })} /></div>
@@ -227,9 +294,7 @@ function QuestionsInner() {
         <Card className="p-6 max-w-3xl space-y-4">
           <p className="text-sm text-muted-foreground">Les questions generees depuis les PDF sont enregistrees en brouillon.</p>
           <div className="grid sm:grid-cols-2 gap-3">
-            <div><Label>Niveau</Label><Input value={form.gradeLevel} onChange={(e) => setForm({ ...form, gradeLevel: e.target.value })} /></div>
-            <div><Label>Section</Label><Input value={form.sectionKey} onChange={(e) => setForm({ ...form, sectionKey: e.target.value })} /></div>
-            <div><Label>Matiere</Label><Input value={form.subject} onChange={(e) => setForm({ ...form, subject: e.target.value })} /></div>
+            <EducationFields form={form} onChange={(values) => setForm({ ...form, ...values })} />
             <div><Label>Chapitre</Label><Input value={form.topic} onChange={(e) => setForm({ ...form, topic: e.target.value })} /></div>
           </div>
           <div>

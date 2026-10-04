@@ -56,45 +56,92 @@ function cleanExpiredAiJobs() {
     }
 }
 
-async function splitPdfTextIntoChunks(file: AiSourceFile, pagesPerChunk: number): Promise<AiSourceChunk[]> {
+// Legacy chunking logic kept as a reference. We are intentionally bypassing it to send the whole PDF text to the model in one request.
+// async function splitPdfTextIntoChunks(file: AiSourceFile, pagesPerChunk: number): Promise<AiSourceChunk[]> {
+//     const pages: string[] = [];
+//     let pageCount: number;
+//     try {
+//         const pdfjs = await loadPdfJs();
+//         const document = await pdfjs.getDocument({ data: new Uint8Array(Buffer.from(file.data, "base64")) }).promise;
+//         pageCount = document.numPages;
+//         for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
+//             const page = await document.getPage(pageNumber);
+//             const content = await page.getTextContent();
+//             let lastY: number | undefined;
+//             const text = content.items.map((item: any) => {
+//                 const separator = lastY !== undefined && lastY !== item.transform[5] ? "\n" : "";
+//                 lastY = item.transform[5];
+//                 return `${separator}${item.str}`;
+//             }).join("").trim();
+//             pages.push(text);
+//             page.cleanup();
+//         }
+//         await document.destroy();
+//     } catch {
+//         apiError(HttpStatus.BAD_REQUEST, "PDF_INVALID", `Impossible d'extraire le texte du PDF ${file.name}.`);
+//     }
+//
+//     if (!pageCount!) apiError(HttpStatus.BAD_REQUEST, "PDF_EMPTY", `Le PDF ${file.name} ne contient aucune page.`);
+//     if (!pages.some((page) => page.length > 0)) {
+//         apiError(HttpStatus.UNPROCESSABLE_ENTITY, "PDF_TEXT_UNAVAILABLE", `Aucun texte extractible dans ${file.name}. Ce PDF semble être un scan; une étape OCR est nécessaire pour Ollama.`);
+//     }
+//
+//     const chunks: AiSourceChunk[] = [];
+//     for (let start = 0; start < pages.length; start += pagesPerChunk) {
+//         const end = Math.min(start + pagesPerChunk, pages.length);
+//         const text = pages
+//             .slice(start, end)
+//             .map((page, index) => `Page ${start + index + 1}:\n${page}`)
+//             .join("\n\n");
+//         chunks.push({ file, pageRange: `${start + 1}-${end}`, text });
+//     }
+//     return chunks;
+// }
+
+async function extractFullPdfText(file: AiSourceFile): Promise<string> {
     const pages: string[] = [];
-    let pageCount: number;
+    let document: any;
+
     try {
         const pdfjs = await loadPdfJs();
-        const document = await pdfjs.getDocument({ data: new Uint8Array(Buffer.from(file.data, "base64")) }).promise;
-        pageCount = document.numPages;
-        for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
-            const page = await document.getPage(pageNumber);
-            const content = await page.getTextContent();
-            let lastY: number | undefined;
-            const text = content.items.map((item: any) => {
-                const separator = lastY !== undefined && lastY !== item.transform[5] ? "\n" : "";
-                lastY = item.transform[5];
-                return `${separator}${item.str}`;
-            }).join("").trim();
-            pages.push(text);
-            page.cleanup();
-        }
-        await document.destroy();
+        document = await pdfjs.getDocument({ data: new Uint8Array(Buffer.from(file.data, "base64")) }).promise;
     } catch {
         apiError(HttpStatus.BAD_REQUEST, "PDF_INVALID", `Impossible d'extraire le texte du PDF ${file.name}.`);
     }
 
-    if (!pageCount!) apiError(HttpStatus.BAD_REQUEST, "PDF_EMPTY", `Le PDF ${file.name} ne contient aucune page.`);
+    if (!document) apiError(HttpStatus.BAD_REQUEST, "PDF_EMPTY", `Le PDF ${file.name} ne contient aucune page.`);
+
+    const pageCount = Number(document.numPages ?? 0);
+    if (pageCount === 0) apiError(HttpStatus.BAD_REQUEST, "PDF_EMPTY", `Le PDF ${file.name} ne contient aucune page.`);
+
+    try {
+        for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
+            const page = await document.getPage(pageNumber);
+            const content = await page.getTextContent();
+            let lastY: number | undefined;
+            const text = content.items
+                .map((item: any) => {
+                    const separator = lastY !== undefined && lastY !== item.transform[5] ? "\n" : "";
+                    lastY = item.transform[5];
+                    return `${separator}${item.str}`;
+                })
+                .join("")
+                .trim();
+            pages.push(text);
+            page.cleanup();
+        }
+    } finally {
+        await document.destroy();
+    }
+
     if (!pages.some((page) => page.length > 0)) {
         apiError(HttpStatus.UNPROCESSABLE_ENTITY, "PDF_TEXT_UNAVAILABLE", `Aucun texte extractible dans ${file.name}. Ce PDF semble être un scan; une étape OCR est nécessaire pour Ollama.`);
     }
 
-    const chunks: AiSourceChunk[] = [];
-    for (let start = 0; start < pages.length; start += pagesPerChunk) {
-        const end = Math.min(start + pagesPerChunk, pages.length);
-        const text = pages
-            .slice(start, end)
-            .map((page, index) => `Page ${start + index + 1}:\n${page}`)
-            .join("\n\n");
-        chunks.push({ file, pageRange: `${start + 1}-${end}`, text });
-    }
-    return chunks;
+    return pages
+        .map((page, index) => `Page ${index + 1}:\n${page}`)
+        .join("\n\n")
+        .trim();
 }
 
 function stripJsonFences(text: string) {
@@ -481,24 +528,34 @@ export class AdminService {
         const model = String(process.env.OLLAMA_MODEL ?? "gemma4:31b-cloud");
         const baseUrl = (process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434").replace(/\/$/, "");
         const timeout = Number(process.env.OLLAMA_TIMEOUT_MS ?? 600_000);
-        const configuredChunkSize = Number(process.env.OLLAMA_PDF_CHUNK_PAGES ?? 20);
-        const pagesPerChunk = Number.isInteger(configuredChunkSize) && configuredChunkSize > 0 ? Math.min(configuredChunkSize, 50) : 20;
-        const chunks: AiSourceChunk[] = [];
+
+        // Disabled chunking: we intentionally do not split the PDF and we send the full extracted document to the model.
+        // const configuredChunkSize = Number(process.env.OLLAMA_PDF_CHUNK_PAGES ?? 20);
+        // const pagesPerChunk = Number.isInteger(configuredChunkSize) && configuredChunkSize > 0 ? Math.min(configuredChunkSize, 50) : 20;
+        // const chunks: AiSourceChunk[] = [];
+
+        const sourceDocuments: { file: AiSourceFile; text: string }[] = [];
         for (const file of files) {
             const isPdf = file.mimeType?.toLowerCase() === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
             if (!isPdf) apiError(HttpStatus.BAD_REQUEST, "PDF_REQUIRED", "Ollama nécessite des fichiers PDF pour extraire le texte.");
-            chunks.push(...await splitPdfTextIntoChunks(file, pagesPerChunk));
+            sourceDocuments.push({ file, text: await extractFullPdfText(file) });
         }
+
+        const documentContext = sourceDocuments
+            .map(({ file, text }) => `Document: ${file.name}\n\n${text}`)
+            .join("\n\n---\n\n")
+            .trim();
+
         updateJob({
             status: "reading",
-            progress: 5,
-            message: `Lecture de ${chunks.length} segment(s) du document`,
+            progress: 20,
+            message: `Lecture complète du document (${sourceDocuments.length} fichier(s))`,
             currentChunk: 0,
-            totalChunks: chunks.length,
+            totalChunks: 1,
         });
 
         const generateContent = async (instruction: string, maxOutputTokens: number, operation: string, documentText = "", jsonMode = false) => {
-            const content = documentText ? `${instruction}\n\nDocument chunk:\n${documentText}` : instruction;
+            const content = documentText ? `${instruction}\n\nDocument:\n${documentText}` : instruction;
             let response: Response;
             try {
                 response = await fetch(`${baseUrl}/api/chat`, {
@@ -526,21 +583,6 @@ export class AdminService {
             }
             return { text: String(data.message?.content ?? "") };
         };
-
-        let documentContext = "";
-        for (const [index, chunk] of chunks.entries()) {
-            const label = `${chunk.file.name}, pages ${chunk.pageRange}`;
-            updateJob({ status: "reading", progress: Math.round(5 + (index / chunks.length) * 75), message: `Lecture du segment ${index + 1}/${chunks.length} : ${label}`, currentChunk: index + 1 });
-            const summaryResponse = await generateContent(
-                `You are analyzing source documents in sequential chunks to prepare educational questions. Read this entire chunk carefully. Maintain comprehensive, factual document notes across chunks: preserve important concepts, definitions, formulas, examples, exercise structure, answers, mark allocations, and page references. Merge the new information with the prior notes; do not discard useful prior facts. Keep the notes compact but sufficiently detailed to cover the whole source, and do not invent missing information.\n\nUser's task: ${prompt}\nChunk ${index + 1} of ${chunks.length}: ${label}\n\nPrior consolidated document notes:\n${documentContext || "No earlier chunks."}\n\nReturn only the updated consolidated notes, not questions or commentary.`,
-                4096,
-                `Ollama document chunk ${index + 1}/${chunks.length}`,
-                chunk.text,
-            );
-            documentContext = String(summaryResponse.text ?? "").trim();
-            if (!documentContext) apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_EMPTY_SUMMARY", `L'IA n'a pas pu analyser ${label}.`);
-            updateJob({ progress: Math.round(5 + ((index + 1) / chunks.length) * 75) });
-        }
 
         updateJob({ status: "generating", progress: 84, message: "Génération des questions" });
         const response = await generateContent(`${prompt}\n\nUse the following consolidated notes from the complete source document(s). Treat them as the authoritative context across all page ranges. Do not claim details that are not present in the notes.\n\nComplete document notes:\n${documentContext}\n\nReturn valid JSON only. Use this array shape:\n[{"question":"Question text","options":["A","B","C","D"],"answer":"Correct answer","marks_breakdown":"Short explanation or grading notes"}]\nDo not include markdown fences.`, 8192, "final question generation", "", true);
