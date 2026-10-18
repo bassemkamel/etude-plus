@@ -402,9 +402,23 @@ function QuestionsInner() {
               </div>
               {activeQuestionGroup.group.map((q: any) => (
                 <Card key={q.id} className="p-4 flex justify-between gap-4">
-                  <div>
+                  <div className="min-w-0 flex-1 space-y-2">
                     <p className="font-medium whitespace-pre-line">{q.questionText}</p>
                     <p className="text-xs text-muted-foreground">{q.subject} - {q.topic} - {q.origin}</p>
+                    {q.markSchemes?.length > 0 && (
+                      <details className="pt-1">
+                        <summary className="cursor-pointer text-sm font-medium text-primary">Voir la correction</summary>
+                        <div className="mt-3 space-y-3 border-l-2 border-primary/20 pl-4">
+                          {q.markSchemes.map((scheme: any) => (
+                            <div key={scheme.id}>
+                              <p className="text-sm font-semibold">Partie {scheme.partLabel}</p>
+                              <p className="whitespace-pre-line text-sm">{scheme.answer}</p>
+                              {scheme.marksBreakdown && <p className="mt-1 text-xs text-muted-foreground">Barème : {scheme.marksBreakdown}</p>}
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Badge>{q.status}</Badge>
@@ -515,6 +529,26 @@ function QuestionsInner() {
             <div className="space-y-3 border-t pt-4">
               <Label>Derniere generation</Label>
               <p className="text-sm text-muted-foreground">{ai.questions?.length ?? 0} question(s) sauvegardee(s).</p>
+              {ai.questions?.map((question: any, index: number) => (
+                <div key={question.id ?? index} className="space-y-2 border-t pt-3">
+                  <p className="text-sm font-semibold">{question.type} · {question.topic}</p>
+                  <p className="whitespace-pre-line text-sm">{question.questionText}</p>
+                  {question.markSchemes?.length > 0 && (
+                    <details>
+                      <summary className="cursor-pointer text-sm font-medium text-primary">Voir la correction</summary>
+                      <div className="mt-3 space-y-3 border-l-2 border-primary/20 pl-4">
+                        {question.markSchemes.map((scheme: any) => (
+                          <div key={scheme.id ?? `${question.id}-${scheme.partLabel}`}>
+                            <p className="text-sm font-semibold">Partie {scheme.partLabel}</p>
+                            <p className="whitespace-pre-line text-sm">{scheme.answer}</p>
+                            {scheme.marksBreakdown && <p className="mt-1 text-xs text-muted-foreground">Barème : {scheme.marksBreakdown}</p>}
+                          </div>
+                        ))}
+                      </div>
+                    </details>
+                  )}
+                </div>
+              ))}
             </div>
           )}
         </Card>

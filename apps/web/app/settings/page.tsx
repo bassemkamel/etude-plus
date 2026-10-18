@@ -61,7 +61,7 @@ function SettingsInner() {
   return (
     <FadeIn>
       <PageHeader title="Paramètres" description="Photo, identité, niveau et sécurité." />
-      <div className="grid lg:grid-cols-2 gap-6 max-w-4xl">
+      <div className="flex-col lg:grid-cols-2 gap-6 max-w-4xl">
         <Card className="p-6 space-y-4">
           <div className="flex items-center gap-4">
             <div className="w-16 h-16 rounded-full bg-primary/15 flex items-center justify-center text-2xl font-bold text-primary">

@@ -21,45 +21,45 @@ function ProgressInner() {
   return (
     <FadeIn>
       <PageHeader title="Ma progression" description="Moyennes /20 par matière et historique des tentatives." />
-      <div className="grid md:grid-cols-3 gap-4 mb-8">
+      <div className="mb-8 grid gap-4 md:grid-cols-3">
         <Card className="p-5">
           <p className="text-sm text-muted-foreground">Moyenne générale</p>
-          <p className="text-3xl font-bold mt-1">{data?.overallAverage != null ? `${data.overallAverage.toFixed(1)}/20` : "—"}</p>
+          <p className="mt-1 text-3xl font-bold">{data?.overallAverage != null ? `${data.overallAverage.toFixed(1)}/20` : "—"}</p>
         </Card>
         <Card className="p-5">
           <p className="text-sm text-muted-foreground">Révisions</p>
-          <p className="text-3xl font-bold mt-1">{data?.totalAttempts ?? 0}</p>
+          <p className="mt-1 text-3xl font-bold">{data?.totalAttempts ?? 0}</p>
         </Card>
         <Card className="p-5">
           <p className="text-sm text-muted-foreground">Matières actives</p>
-          <p className="text-3xl font-bold mt-1">{subjects.length}</p>
+          <p className="mt-1 text-3xl font-bold">{subjects.length}</p>
         </Card>
       </div>
-      <h2 className="font-bold mb-3">Par matière</h2>
-      <div className="space-y-3 mb-10">
-        {subjects.length === 0 && <p className="text-muted-foreground text-sm">Pas encore de notes. <Link href="/revision" className="text-primary">Réviser</Link></p>}
-        {subjects.map(([name, s]) => (
+      <h2 className="mb-3 font-bold">Par matière</h2>
+      <div className="mb-10 space-y-3">
+        {subjects.length === 0 && <p className="text-sm text-muted-foreground">Pas encore de notes. <Link href="/revision" className="text-primary">Réviser</Link></p>}
+        {subjects.map(([name, subject]) => (
           <Card key={name} className="p-4">
-            <div className="flex justify-between mb-2">
+            <div className="mb-2 flex justify-between">
               <Link href={`/revision/${encodeURIComponent(name)}`} className="font-semibold hover:text-primary">{name}</Link>
-              <span className="font-bold">{s.avg.toFixed(1)}/20</span>
+              <span className="font-bold">{subject.avg.toFixed(1)}/20</span>
             </div>
-            <div className="h-2 bg-muted rounded-full overflow-hidden">
-              <div className="h-full bg-primary rounded-full" style={{ width: `${Math.min(100, (s.avg / 20) * 100)}%` }} />
+            <div className="h-2 overflow-hidden rounded-full bg-muted">
+              <div className="h-full rounded-full bg-primary" style={{ width: `${Math.min(100, (subject.avg / 20) * 100)}%` }} />
             </div>
-            <p className="text-xs text-muted-foreground mt-1">{s.count} tentative{s.count > 1 ? "s" : ""}</p>
+            <p className="mt-1 text-xs text-muted-foreground">{subject.count} tentative{subject.count > 1 ? "s" : ""}</p>
           </Card>
         ))}
       </div>
-      <h2 className="font-bold mb-3">Historique</h2>
+      <h2 className="mb-3 font-bold">Historique</h2>
       <div className="space-y-2">
-        {data?.recent?.map((r) => (
-          <Card key={r.id} className="p-4 flex justify-between items-center">
+        {data?.recent?.map((attempt) => (
+          <Card key={attempt.id} className="flex items-center justify-between p-4">
             <div>
-              <p className="font-medium">{r.subject}{r.topic ? ` · ${r.topic}` : ""}</p>
-              <p className="text-xs text-muted-foreground">{formatDateTN(r.completedAt)}</p>
+              <p className="font-medium">{attempt.subject}{attempt.topic ? ` · ${attempt.topic}` : ""}</p>
+              <p className="text-xs text-muted-foreground">{formatDateTN(attempt.completedAt)}</p>
             </div>
-            <Badge>{r.gradeOutOf20 != null ? `${r.gradeOutOf20.toFixed(1)}/20` : "—"}</Badge>
+            <Badge>{attempt.gradeOutOf20 != null ? `${attempt.gradeOutOf20.toFixed(1)}/20` : "—"}</Badge>
           </Card>
         ))}
       </div>

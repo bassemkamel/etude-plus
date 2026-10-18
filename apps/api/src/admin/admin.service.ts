@@ -191,6 +191,41 @@ function parseAiQuestions(text: string): AiGeneratedQuestion[] {
     return Array.isArray(items) ? items : [];
 }
 
+function normalizeQuestionText(text: string) {
+    return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+}
+
+function isPdfNavigationQuestion(item: AiGeneratedQuestion) {
+    const text = normalizeQuestionText([
+        item.question ?? item.question_text ?? "",
+        ...(item.parts ?? []).map((part) => part.text ?? ""),
+    ].join(" "));
+    return /\b(sommaire|table des matieres|table of contents|index du document|quelle page|a quelle page|numero de page|page de debut|what page|which page|page number)\b/.test(text)
+        || /\b(chapitre|chapter)\b.{0,50}\b(commence|commencer|debute|begin|starts?)\b.{0,30}\b(page|sommaire|table des matieres)\b/.test(text);
+}
+
+function isActionableExercise(item: AiGeneratedQuestion) {
+    const parts = (item.parts ?? []).filter((part) => String(part.text ?? "").trim());
+    const statement = String(item.question ?? item.question_text ?? "").trim();
+    if (!parts.length || statement.length < 40) return false;
+    const actionPattern = /\b(calcul\w*|determin\w*|resolv\w*|simplifi\w*|developp\w*|factoris\w*|montr\w*|demontr\w*|dedui\w*|verifi\w*|justifi\w*|constru\w*|trac\w*|complet\w*|appliqu\w*|effectu\w*|decri\w*|expliqu\w*|compar\w*|identifi\w*|class\w*|represent\w*|etud\w*|prouv\w*|find|calculate|solve|simplify|expand|factor|prove|justify|construct|draw|complete|apply|describe|explain|compare|identify|classify|show)\b|(?:احسب|اوجد|حل|برهن|علل|انشئ|ارسم|اكمل|طبق|اشرح|قارن)/;
+    const allPartsAreActionable = parts.every((part) => {
+        const text = normalizeQuestionText(part.text ?? "").trim();
+        return actionPattern.test(text) || (text.length >= 20 && text.includes("?"));
+    });
+    if (!allPartsAreActionable) return false;
+
+    const schemes = (item.mark_schemes ?? []).filter((scheme) => String(scheme.answer ?? "").trim());
+    return parts.every((part, index) => {
+        const label = String(part.label ?? String.fromCharCode(97 + index)).trim().toLowerCase();
+        return schemes.some((scheme) => {
+            const schemeLabel = String(scheme.part_label ?? scheme.partLabel ?? "").trim().toLowerCase();
+            const breakdown = String(scheme.marks_breakdown ?? scheme.marksBreakdown ?? "").trim();
+            return schemeLabel === label && breakdown.length > 0;
+        });
+    });
+}
+
 function splitTextIntoSourceChunks(file: AiSourceFile, text: string, maxChars: number): AiSourceChunk[] {
     const chunks: AiSourceChunk[] = [];
     let start = 0;
@@ -215,15 +250,26 @@ function scoreTopicRelevance(text: string, topic: string) {
     return terms.reduce((score, term) => score + (normalizedText.includes(term) ? 1 : 0), 0);
 }
 
-function formatAiQuestionText(item: AiGeneratedQuestion) {
+function formatAiQuestionText(item: AiGeneratedQuestion, includeParts = false) {
     const question = String(item.question ?? item.question_text ?? "").trim();
+    const parts = includeParts && Array.isArray(item.parts)
+        ? item.parts
+            .map((part, index) => ({
+                label: String(part.label ?? String.fromCharCode(97 + index)),
+                text: String(part.text ?? "").trim(),
+            }))
+            .filter((part) => part.text)
+        : [];
+    const statement = parts.length
+        ? `${question}\n\n${parts.map((part) => `${part.label}. ${part.text}`).join("\n")}`
+        : question;
     const options = Array.isArray(item.options)
         ? item.options
             .map((option) => String(option).trim().replace(/^[A-Z]\s*[.)\-:]\s*/i, ""))
             .filter(Boolean)
         : [];
-    if (!options.length) return question;
-    return `${question}\n\n${options.map((option, index) => `${String.fromCharCode(65 + index)}. ${option}`).join("\n")}`;
+    if (!options.length) return statement;
+    return `${statement}\n\n${options.map((option, index) => `${String.fromCharCode(65 + index)}. ${option}`).join("\n")}`;
 }
 
 function normalizeAiQuestionType(type: string | undefined, options: string[]): "Exercice" | "QCM" | "Probleme" | "Redaction" {
@@ -693,15 +739,19 @@ export class AdminService {
         for (let questionIndex = 0; questionIndex < meta.count; questionIndex++) {
             const preferredSourceIndex = questionIndex % Math.min(rankedSourceIndices.length, maxSourceAttempts);
             const requestedType = meta.types[questionIndex % meta.types.length];
-            const qcmFormattingInstruction = requestedType === "QCM"
-                ? "Put the question statement in the question field and each plain answer choice in the options array. Include at least two options and identify the correct choice in the mark scheme."
-                : "Provide meaningful parts and matching mark schemes; omit options unless needed.";
+            const typeRequirements = requestedType === "Exercice"
+                ? "Create a complete, student-facing exercise in this single JSON item. The question field must contain the full exercise statement: a concise context, all givens/data needed, and a clear lead-in. The parts array must then contain every actual subquestion, each as a concrete task (calculate, solve, prove, construct, explain, justify, etc.); never leave 'answer the following questions' without writing those questions. The mark_schemes array must provide a worked answer/correction and marks breakdown for EVERY part, with matching part_label values. Do not put the correction in the question statement."
+                : requestedType === "QCM"
+                    ? "Create a substantive question that tests the selected chapter, not document recall. Put the statement in question and each plain answer choice in options. Include at least two plausible options and identify the correct choice in the mark scheme."
+                    : requestedType === "Probleme"
+                        ? "Create a complete, solvable problem with a concrete scenario, all necessary givens, and explicit tasks in parts. Include the expected solution and marking scheme."
+                        : "Create a specific writing prompt about the selected chapter that tells the student what to explain, discuss, or demonstrate. Include useful criteria or subparts and a matching marking scheme.";
             let acceptedQuestion: AiGeneratedQuestion | undefined;
             for (let sourceAttempt = 0; sourceAttempt < maxSourceAttempts; sourceAttempt++) {
                 const sourceIndex = rankedSourceIndices[(preferredSourceIndex + sourceAttempt) % rankedSourceIndices.length];
                 const sourceChunk = sourceChunks[sourceIndex];
                 const sourceExcerpt = `Document: ${sourceChunk.file.name}\nSource ${sourceChunk.pageRange}:\n${sourceChunk.text}`;
-                const prompt = `Generate exactly one ${requestedType} question from this source excerpt. ${chapterInstruction}\n\n${qcmFormattingInstruction}\n\nReturn only a valid JSON array containing exactly one item, with no markdown fences or surrounding text. Use this structure:\n{"question":"Question statement","topic":"${meta.topic}","type":"${requestedType}","difficulty":"${meta.difficulty}","parts":[{"label":"a","text":"Question or sub-question","marks":2}],"mark_schemes":[{"part_label":"a","answer":"Expected answer","marks_breakdown":"Grading details"}],"options":["Choice A","Choice B"]}\nUse only information in the source excerpt; do not invent facts or return an empty array.`;
+                const prompt = `Generate exactly one useful ${requestedType} for a student studying ${meta.subject}, level ${meta.gradeLevel}, chapter "${meta.topic}". ${chapterInstruction}\n\n${typeRequirements}\n\nNever ask where a chapter appears in the PDF. Do not ask about page numbers, the table of contents, headings, chapter order, or any other document-navigation or document-format detail. Ask about the subject matter only. Do not produce generic opening text such as "Concerning ... answer the following questions" unless the actual concrete questions are included in parts. Write all student-facing text in ${meta.language}.\n\nReturn only a valid JSON array containing exactly one item, with no markdown fences or surrounding text. Use this structure:\n{"question":"Complete student-facing exercise statement with all necessary context and givens","topic":"${meta.topic}","type":"${requestedType}","difficulty":"${meta.difficulty}","parts":[{"label":"a","text":"A specific task the student must perform","marks":2},{"label":"b","text":"Another specific task","marks":2}],"mark_schemes":[{"part_label":"a","answer":"Worked correction for part a","marks_breakdown":"How marks are awarded for part a"},{"part_label":"b","answer":"Worked correction for part b","marks_breakdown":"How marks are awarded for part b"}],"options":["Choice A","Choice B"]}\nFor Exercice, include all parts and matching worked corrections in this one item. Use only facts and methods supported by the source excerpt; do not invent facts. If this excerpt does not contain enough subject-matter information, return an empty JSON array so another excerpt can be tried.`;
                 updateJob({
                     status: "generating",
                     progress: 20 + Math.round((questionIndex / meta.count) * 65),
@@ -711,7 +761,8 @@ export class AdminService {
                 });
                 let raw: string;
                 try {
-                    const response = await generateContent(prompt, 768, `question ${questionIndex + 1}/${meta.count}, source ${sourceIndex + 1}/${sourceChunks.length}`, sourceExcerpt, true);
+                    const outputTokenLimit = requestedType === "Exercice" || requestedType === "Probleme" ? 1536 : 768;
+                    const response = await generateContent(prompt, outputTokenLimit, `question ${questionIndex + 1}/${meta.count}, source ${sourceIndex + 1}/${sourceChunks.length}`, sourceExcerpt, true);
                     raw = response.text;
                 } catch (error) {
                     if (sourceAttempt + 1 < maxSourceAttempts && error instanceof Error && /repeat limit/i.test(error.message)) {
@@ -746,11 +797,41 @@ export class AdminService {
                     });
                     continue;
                 }
-                acceptedQuestion = batchQuestions[0];
+                const candidate = batchQuestions[0];
+                const candidateOptions = Array.isArray(candidate.options) ? candidate.options.filter(Boolean) : [];
+                if (normalizeAiQuestionType(candidate.type, candidateOptions) !== requestedType) {
+                    console.warn("[Ollama] Rejected question with an unexpected type", {
+                        question: questionIndex + 1,
+                        expectedType: requestedType,
+                        receivedType: candidate.type,
+                        source: sourceChunk.file.name,
+                        pageRange: sourceChunk.pageRange,
+                    });
+                    continue;
+                }
+                if (isPdfNavigationQuestion(candidate)) {
+                    console.warn("[Ollama] Rejected document-navigation question", {
+                        question: questionIndex + 1,
+                        source: sourceChunk.file.name,
+                        pageRange: sourceChunk.pageRange,
+                        responsePreview: raw.slice(0, 300),
+                    });
+                    continue;
+                }
+                if (requestedType === "Exercice" && !isActionableExercise(candidate)) {
+                    console.warn("[Ollama] Rejected non-actionable exercise", {
+                        question: questionIndex + 1,
+                        source: sourceChunk.file.name,
+                        pageRange: sourceChunk.pageRange,
+                        responsePreview: raw.slice(0, 300),
+                    });
+                    continue;
+                }
+                acceptedQuestion = candidate;
                 break;
             }
             if (!acceptedQuestion) {
-                apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_JSON_INVALID", `L'IA n'a pas produit de JSON exploitable pour « ${meta.topic} » après ${maxSourceAttempts} extraits. Vérifiez la sortie Ollama et le contenu du PDF.`);
+                apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_QUESTION_UNSUITABLE", `Impossible de générer une question ${requestedType} exploitable pour « ${meta.topic} » après ${maxSourceAttempts} extraits. Vérifiez que le PDF contient assez de matière sur ce chapitre.`);
             }
             generated.push(acceptedQuestion!);
         }
@@ -759,10 +840,10 @@ export class AdminService {
         updateJob({ status: "saving", progress: 92, message: "Enregistrement des questions" });
         const saved = [];
         for (const item of generated!) {
-            const questionText = formatAiQuestionText(item);
-            if (!questionText) continue;
             const options = Array.isArray(item.options) ? item.options.filter(Boolean) : [];
             const type = normalizeAiQuestionType(item.type, options);
+            const questionText = formatAiQuestionText(item, type === "Exercice" || type === "Probleme" || type === "Redaction");
+            if (!questionText) continue;
             if (!meta.types.includes(type)) {
                 apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_TYPE_NOT_SELECTED", `L'IA a renvoyé le type ${type}, qui n'a pas été sélectionné.`);
             }

@@ -30,8 +30,6 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
   const studentItems: NavItem[] = [
     { icon: LayoutDashboard, label: t("sidebar.student.dashboard"), href: "/dashboard" },
     { icon: Sparkles, label: "Révision Étude+", href: "/revision" },
-    { icon: BarChart3, label: "Ma progression", href: "/progress" },
-    { icon: CreditCard, label: "Mon plan", href: "/plan" },
     { icon: FileText, label: "Mes documents", href: "/documents" },
     { icon: Bell, label: t("sidebar.student.notifications"), href: "/notifications" },
     { icon: Settings, label: t("sidebar.student.settings"), href: "/settings" },
@@ -60,11 +58,24 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
   ];
 
   const items = isSuperAdmin ? superItems : isAdmin ? adminItems : studentItems;
+  const isStudentDashboard = user.role === "student" && ["/dashboard", "/grades", "/progress", "/plan"].includes(location);
+  const studentTabs: NavItem[] = [
+    { icon: LayoutDashboard, label: "Dashboard", href: "/dashboard" },
+    { icon: BookOpen, label: "Notes", href: "/grades" },
+    { icon: BarChart3, label: "Progression", href: "/progress" },
+    { icon: CreditCard, label: "Mon plan", href: "/plan" },
+  ];
   const roleLabel = isSuperAdmin ? t("sidebar.roles.super_admin") : user.role === "admin" ? t("sidebar.roles.admin") : t("sidebar.roles.student");
+
+  function isStudentTabActive(href: string) {
+    return location === href || location.startsWith(`${href}/`);
+  }
 
   function renderNavItem(item: NavItem, onLinkClick?: () => void) {
     const isRevision = item.href === "/revision";
-    const active = isRevision ? location.startsWith("/revision") : location === item.href || location.startsWith(item.href + "/");
+    const active = item.href === "/dashboard" && isStudentDashboard
+      ? true
+      : isRevision ? location.startsWith("/revision") : location === item.href || location.startsWith(item.href + "/");
     return (
       <Link
         key={item.href}
@@ -149,7 +160,31 @@ export function DashboardLayout({ children }: { children: React.ReactNode }) {
             {items.map((item) => renderNavItem(item, () => setMobileOpen(false)))}
           </div>
         )}
-        <div className="flex-1 p-6 lg:p-10">{children}</div>
+        <div className="flex-1 p-6 lg:p-10">
+          {isStudentDashboard && (
+            <nav className="mb-8 flex gap-1 overflow-x-auto border-b border-border" role="tablist" aria-label="Espace élève">
+              {studentTabs.map((tab) => {
+                const active = isStudentTabActive(tab.href);
+                return (
+                  <Link
+                    key={tab.href}
+                    href={tab.href}
+                    role="tab"
+                    aria-selected={active}
+                    className={cn(
+                      "flex shrink-0 items-center gap-2 border-b-2 px-4 py-3 text-sm font-medium transition-colors",
+                      active ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground",
+                    )}
+                  >
+                    <tab.icon className="h-4 w-4" />
+                    {tab.label}
+                  </Link>
+                );
+              })}
+            </nav>
+          )}
+          {children}
+        </div>
       </main>
     </div>
   );
