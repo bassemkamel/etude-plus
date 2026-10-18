@@ -158,10 +158,61 @@ function stripJsonFences(text: string) {
         .trim();
 }
 
+function extractJsonPayload(text: string) {
+    const cleaned = stripJsonFences(text);
+    const start = cleaned.search(/[\[{]/);
+    if (start < 0) throw new SyntaxError("No JSON object or array found in Ollama response.");
+
+    const closing: string[] = [];
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < cleaned.length; index++) {
+        const character = cleaned[index];
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (character === "\\") escaped = true;
+            else if (character === '"') inString = false;
+            continue;
+        }
+        if (character === '"') inString = true;
+        else if (character === "{") closing.push("}");
+        else if (character === "[") closing.push("]");
+        else if (character === "}" || character === "]") {
+            if (closing.pop() !== character) throw new SyntaxError("Mismatched JSON brackets in Ollama response.");
+            if (!closing.length) return cleaned.slice(start, index + 1);
+        }
+    }
+    throw new SyntaxError("Incomplete JSON in Ollama response.");
+}
+
 function parseAiQuestions(text: string): AiGeneratedQuestion[] {
-    const parsed = JSON.parse(stripJsonFences(text));
+    const parsed = JSON.parse(extractJsonPayload(text));
     const items = Array.isArray(parsed) ? parsed : parsed.questions;
     return Array.isArray(items) ? items : [];
+}
+
+function splitTextIntoSourceChunks(file: AiSourceFile, text: string, maxChars: number): AiSourceChunk[] {
+    const chunks: AiSourceChunk[] = [];
+    let start = 0;
+    while (start < text.length) {
+        let end = Math.min(start + maxChars, text.length);
+        if (end < text.length) {
+            const boundary = Math.max(text.lastIndexOf("\n", end), text.lastIndexOf(" ", end));
+            if (boundary > start + maxChars * 0.7) end = boundary;
+        }
+        const chunkText = text.slice(start, end).trim();
+        if (chunkText) chunks.push({ file, pageRange: `segment ${chunks.length + 1}`, text: chunkText });
+        start = end;
+        while (start < text.length && /\s/.test(text[start])) start++;
+    }
+    return chunks;
+}
+
+function scoreTopicRelevance(text: string, topic: string) {
+    const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+    const normalizedText = normalize(text);
+    const terms = [...new Set(normalize(topic).split(/[^a-z0-9]+/).filter((term) => term.length > 2))];
+    return terms.reduce((score, term) => score + (normalizedText.includes(term) ? 1 : 0), 0);
 }
 
 function formatAiQuestionText(item: AiGeneratedQuestion) {
@@ -580,33 +631,29 @@ export class AdminService {
             status: String(body.status ?? "draft"),
             language: String(body.language ?? "Français"),
         };
-        const model = String(process.env.OLLAMA_MODEL ?? "gemma4:31b-cloud");
+        const model = String(process.env.OLLAMA_MODEL ?? "qwen2.5:7b");
         const baseUrl = (process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434").replace(/\/$/, "");
         const timeout = Number(process.env.OLLAMA_TIMEOUT_MS ?? 600_000);
 
-        // Disabled chunking: we intentionally do not split the PDF and we send the full extracted document to the model.
-        // const configuredChunkSize = Number(process.env.OLLAMA_PDF_CHUNK_PAGES ?? 20);
-        // const pagesPerChunk = Number.isInteger(configuredChunkSize) && configuredChunkSize > 0 ? Math.min(configuredChunkSize, 50) : 20;
-        // const chunks: AiSourceChunk[] = [];
-
-        const sourceDocuments: { file: AiSourceFile; text: string }[] = [];
+        const sourceChunks: AiSourceChunk[] = [];
         for (const file of files) {
             const isPdf = file.mimeType?.toLowerCase() === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
             if (!isPdf) apiError(HttpStatus.BAD_REQUEST, "PDF_REQUIRED", "Ollama nécessite des fichiers PDF pour extraire le texte.");
-            sourceDocuments.push({ file, text: await extractFullPdfText(file) });
+            const text = await extractFullPdfText(file);
+            sourceChunks.push(...splitTextIntoSourceChunks(file, text, 1800));
         }
-
-        const documentContext = sourceDocuments
-            .map(({ file, text }) => `Document: ${file.name}\n\n${text}`)
-            .join("\n\n---\n\n")
-            .trim();
+        if (!sourceChunks.length) apiError(HttpStatus.UNPROCESSABLE_ENTITY, "PDF_TEXT_UNAVAILABLE", "Aucun texte extractible dans les documents fournis.");
+        const rankedSourceIndices = sourceChunks
+            .map((chunk, index) => ({ index, score: scoreTopicRelevance(chunk.text, meta.topic) }))
+            .sort((left, right) => right.score - left.score || left.index - right.index)
+            .map(({ index }) => index);
 
         updateJob({
             status: "reading",
             progress: 20,
-            message: `Lecture complète du document (${sourceDocuments.length} fichier(s))`,
+            message: `Documents lus (${sourceChunks.length} extraits)`,
             currentChunk: 0,
-            totalChunks: 1,
+            totalChunks: meta.count,
         });
 
         const generateContent = async (instruction: string, maxOutputTokens: number, operation: string, documentText = "", jsonMode = false) => {
@@ -639,27 +686,75 @@ export class AdminService {
             return { text: String(data.message?.content ?? "") };
         };
 
-        updateJob({ status: "generating", progress: 84, message: "Génération des questions" });
         const chapterInstruction = `Generate every question only about the selected chapter "${meta.topic}". Set the topic field of every item to exactly "${meta.topic}". Do not use other chapters.`;
-        const typeInstruction = meta.types.length === 1
-            ? `Generate all questions as ${meta.types[0]}.`
-            : `Use only these requested types: ${meta.types.join(", ")}. Distribute them as evenly as possible; use each type at least once when the requested count allows.`;
-        const qcmFormattingInstruction = meta.types.includes("QCM")
-            ? "For every QCM, put only the question statement in the question field. Put each answer choice as a separate plain string in the options array; do not include choice labels like A. or B., and do not put choices in the question field. The server will store the statement, a blank line, then one labeled choice per line."
-            : "";
-        const prompt = `Generate exactly ${meta.count} questions from the source documents. ${typeInstruction}\n\n${chapterInstruction}\n\n${qcmFormattingInstruction}\n\nMandatory output contract: return only a valid JSON array, with no markdown fences or surrounding text. Every item must match this structure:\n{"question":"Question statement","topic":"${meta.topic}","type":"${meta.types[0]}","difficulty":"moyen","parts":[{"label":"a","text":"Question or sub-question","marks":2}],"mark_schemes":[{"part_label":"a","answer":"Expected answer","marks_breakdown":"Grading details"}],"options":["Choice A","Choice B"]}\nThe type field must be exactly one of these values: ${meta.types.map((type) => `"${type}"`).join(", ")}. The type in the example is illustrative only. For QCM, include at least two options and put the correct choice in the matching mark_schemes answer. For Exercice, Probleme, and Redaction, provide meaningful parts and corresponding mark schemes; omit options unless explicitly needed. Each part needs a label, text, and positive numeric marks; each mark scheme needs a matching part_label and answer. Use this difficulty for every question: ${meta.difficulty}. Treat the source documents as authoritative; do not invent content.\n\nSource documents:\n${documentContext}`;
-        const response = await generateContent(prompt, 8192, "final question generation", "", true);
-        const raw = response.text ?? "";
-        let generated: AiGeneratedQuestion[];
-        try {
-            generated = parseAiQuestions(raw);
-        } catch {
-            apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_JSON_INVALID", "La reponse IA n'est pas un JSON valide.");
+        const generated: AiGeneratedQuestion[] = [];
+        const rawResponses: string[] = [];
+        const maxSourceAttempts = Math.min(sourceChunks.length, 5);
+        for (let questionIndex = 0; questionIndex < meta.count; questionIndex++) {
+            const preferredSourceIndex = questionIndex % Math.min(rankedSourceIndices.length, maxSourceAttempts);
+            const requestedType = meta.types[questionIndex % meta.types.length];
+            const qcmFormattingInstruction = requestedType === "QCM"
+                ? "Put the question statement in the question field and each plain answer choice in the options array. Include at least two options and identify the correct choice in the mark scheme."
+                : "Provide meaningful parts and matching mark schemes; omit options unless needed.";
+            let acceptedQuestion: AiGeneratedQuestion | undefined;
+            for (let sourceAttempt = 0; sourceAttempt < maxSourceAttempts; sourceAttempt++) {
+                const sourceIndex = rankedSourceIndices[(preferredSourceIndex + sourceAttempt) % rankedSourceIndices.length];
+                const sourceChunk = sourceChunks[sourceIndex];
+                const sourceExcerpt = `Document: ${sourceChunk.file.name}\nSource ${sourceChunk.pageRange}:\n${sourceChunk.text}`;
+                const prompt = `Generate exactly one ${requestedType} question from this source excerpt. ${chapterInstruction}\n\n${qcmFormattingInstruction}\n\nReturn only a valid JSON array containing exactly one item, with no markdown fences or surrounding text. Use this structure:\n{"question":"Question statement","topic":"${meta.topic}","type":"${requestedType}","difficulty":"${meta.difficulty}","parts":[{"label":"a","text":"Question or sub-question","marks":2}],"mark_schemes":[{"part_label":"a","answer":"Expected answer","marks_breakdown":"Grading details"}],"options":["Choice A","Choice B"]}\nUse only information in the source excerpt; do not invent facts or return an empty array.`;
+                updateJob({
+                    status: "generating",
+                    progress: 20 + Math.round((questionIndex / meta.count) * 65),
+                    message: `Génération question ${questionIndex + 1}/${meta.count}`,
+                    currentChunk: questionIndex + 1,
+                    totalChunks: meta.count,
+                });
+                let raw: string;
+                try {
+                    const response = await generateContent(prompt, 768, `question ${questionIndex + 1}/${meta.count}, source ${sourceIndex + 1}/${sourceChunks.length}`, sourceExcerpt, true);
+                    raw = response.text;
+                } catch (error) {
+                    if (sourceAttempt + 1 < maxSourceAttempts && error instanceof Error && /repeat limit/i.test(error.message)) {
+                        console.warn("[Ollama] Repeating-token failure; retrying with another PDF excerpt", {
+                            question: questionIndex + 1,
+                            source: sourceChunk.file.name,
+                            pageRange: sourceChunk.pageRange,
+                        });
+                        continue;
+                    }
+                    throw error;
+                }
+                rawResponses.push(raw);
+                let batchQuestions: AiGeneratedQuestion[];
+                try {
+                    batchQuestions = parseAiQuestions(raw);
+                } catch {
+                    console.warn("[Ollama] Invalid question JSON; trying another PDF excerpt", {
+                        question: questionIndex + 1,
+                        source: sourceChunk.file.name,
+                        pageRange: sourceChunk.pageRange,
+                        responsePreview: raw.slice(0, 300),
+                    });
+                    continue;
+                }
+                if (!batchQuestions.length) {
+                    console.warn("[Ollama] No questions returned for PDF excerpt; trying another excerpt", {
+                        question: questionIndex + 1,
+                        source: sourceChunk.file.name,
+                        pageRange: sourceChunk.pageRange,
+                        responsePreview: raw.slice(0, 300),
+                    });
+                    continue;
+                }
+                acceptedQuestion = batchQuestions[0];
+                break;
+            }
+            if (!acceptedQuestion) {
+                apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_JSON_INVALID", `L'IA n'a pas produit de JSON exploitable pour « ${meta.topic} » après ${maxSourceAttempts} extraits. Vérifiez la sortie Ollama et le contenu du PDF.`);
+            }
+            generated.push(acceptedQuestion!);
         }
-        if (!generated!.length) apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_EMPTY", "Aucune question generee.");
-        if (generated!.length !== meta.count) {
-            apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_COUNT_MISMATCH", `L'IA a renvoyé ${generated!.length} question(s) au lieu de ${meta.count}.`);
-        }
+        const raw = rawResponses.join("\n\n");
 
         updateJob({ status: "saving", progress: 92, message: "Enregistrement des questions" });
         const saved = [];
@@ -754,7 +849,7 @@ export class AdminService {
         await this.audit(actor, ip, "ai_generate_questions", "question", saved[0]?.id, {
             model,
             files: files.map((file) => ({ name: file.name, mimeType: file.mimeType })),
-            prompt,
+            sourceSegments: sourceChunks.length,
             count: saved.length,
         });
         const result = { persisted: true, raw, questions: saved };
