@@ -79,9 +79,26 @@ npx pnpm@10.32.1 dev:web    # http://localhost:3000
 
 ## AI question generation with Ollama
 
-For local development, set `ENABLE_AI=true` and configure `OLLAMA_BASE_URL` (default `http://127.0.0.1:11434`) plus `OLLAMA_MODEL`. The API sends PDF text to Ollama in page chunks (`OLLAMA_PDF_CHUNK_PAGES`, default 20) and carries a running summary forward. Restart the API after changing `.env`.
+Ollama runs in Docker; no host Ollama installation is required. After copying `.env.example` to `.env`, start the services:
 
-`gemma4:31b-cloud` uses Ollama's hosted cloud service; it is not fully local inference. To run inference on your own machine, install/pull a model supported by your hardware and set `OLLAMA_MODEL` to that exact local model tag. Ollama must be reachable from the API process. Scanned PDFs without a text layer currently need OCR before they can be processed by Ollama.
+```powershell
+docker compose up -d
+```
+
+Compose starts Ollama and automatically checks for `OLLAMA_MODEL` (default `qwen3:8b`), pulling it if it is missing. The first startup can take time while the model downloads; follow progress with `docker compose logs -f ollama-model-init`. The model files are stored in the persistent `ollama_data` Docker volume. `OLLAMA_PORT` controls the host port (default `11435`), and `OLLAMA_BASE_URL` must point to it; the example values are already aligned. `ENABLE_AI=true` enables question generation. For each PDF, the API extracts page text and groups complete pages into excerpts of about 1,800 characters, ranking them by normalized topic-word matches. It sends a relevant excerpt with each question request and tries at most one alternate excerpt if a response is unsuitable; it does not create or carry a running summary between requests. Restart the API after changing `.env`.
+
+Each selected type (`QCM`, `Exercice`, `Probleme`, or `Redaction`) has its own output schema and validation. QCM responses require choices, a matching correct answer, and an explanation; the other types require type-appropriate tasks and matching solutions or a writing rubric. Mixed or incomplete responses are rejected rather than saved under the wrong type.
+
+If you already have the standalone `etudeplus-ollama` container running on port `11435`, stop it before starting the Compose service to release that port:
+
+```powershell
+docker stop etudeplus-ollama
+docker compose up -d
+```
+
+The Compose service reuses the existing `etudeplus_ollama_data` volume, so a model already downloaded there does not need to be downloaded again. Do not remove the old container until you have verified the Compose service works. Scanned PDFs without a text layer currently need OCR before they can be processed by Ollama.
+
+The API currently runs on the host, so it uses `http://127.0.0.1:11435`. If you later run the API as a container on the `etudeplus` Compose network, configure `OLLAMA_BASE_URL=http://ollama:11434` instead. The Ollama port is bound to localhost and is not exposed publicly; keep it that way on production servers unless there is a specific network-security requirement.
 
 ---
 

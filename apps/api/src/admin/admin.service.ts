@@ -13,8 +13,10 @@ type AiSourceFile = {
 };
 
 type AiQuestionType = "Exercice" | "QCM" | "Probleme" | "Redaction";
+type AiQuestionStatus = "draft" | "published" | "archived";
 
 const AI_QUESTION_TYPES: readonly AiQuestionType[] = ["Exercice", "QCM", "Probleme", "Redaction"];
+const AI_QUESTION_STATUSES: readonly AiQuestionStatus[] = ["draft", "published", "archived"];
 
 type AiGeneratedQuestion = {
     question?: string;
@@ -32,6 +34,11 @@ type AiGeneratedQuestion = {
 type AiSourceChunk = {
     file: AiSourceFile;
     pageRange: string;
+    text: string;
+};
+
+type AiPdfPage = {
+    pageNumber: number;
     text: string;
 };
 
@@ -62,7 +69,7 @@ function cleanExpiredAiJobs() {
     }
 }
 
-// Legacy chunking logic kept as a reference. We are intentionally bypassing it to send the whole PDF text to the model in one request.
+// Legacy fixed-pages-per-chunk implementation kept as a reference.
 // async function splitPdfTextIntoChunks(file: AiSourceFile, pagesPerChunk: number): Promise<AiSourceChunk[]> {
 //     const pages: string[] = [];
 //     let pageCount: number;
@@ -104,8 +111,8 @@ function cleanExpiredAiJobs() {
 //     return chunks;
 // }
 
-async function extractFullPdfText(file: AiSourceFile): Promise<string> {
-    const pages: string[] = [];
+async function extractPdfPages(file: AiSourceFile): Promise<AiPdfPage[]> {
+    const pages: AiPdfPage[] = [];
     let document: any;
 
     try {
@@ -133,21 +140,18 @@ async function extractFullPdfText(file: AiSourceFile): Promise<string> {
                 })
                 .join("")
                 .trim();
-            pages.push(text);
+            pages.push({ pageNumber, text });
             page.cleanup();
         }
     } finally {
         await document.destroy();
     }
 
-    if (!pages.some((page) => page.length > 0)) {
+    if (!pages.some((page) => page.text.length > 0)) {
         apiError(HttpStatus.UNPROCESSABLE_ENTITY, "PDF_TEXT_UNAVAILABLE", `Aucun texte extractible dans ${file.name}. Ce PDF semble être un scan; une étape OCR est nécessaire pour Ollama.`);
     }
 
-    return pages
-        .map((page, index) => `Page ${index + 1}:\n${page}`)
-        .join("\n\n")
-        .trim();
+    return pages;
 }
 
 function stripJsonFences(text: string) {
@@ -185,10 +189,44 @@ function extractJsonPayload(text: string) {
     throw new SyntaxError("Incomplete JSON in Ollama response.");
 }
 
+function isDbSafeText(value: unknown): value is string {
+    return typeof value === "string" && !value.includes("\0");
+}
+
+function isAiGeneratedQuestion(value: unknown): value is AiGeneratedQuestion {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+    const candidate = value as Record<string, unknown>;
+    const optionalStringFields = ["question", "question_text", "answer", "marks_breakdown", "topic", "difficulty", "type"];
+    if (optionalStringFields.some((field) => candidate[field] !== undefined && !isDbSafeText(candidate[field]))) return false;
+    if (!isDbSafeText(candidate.question) && !isDbSafeText(candidate.question_text)) return false;
+    if (candidate.options !== undefined && (!Array.isArray(candidate.options) || !candidate.options.every(isDbSafeText))) return false;
+    if (candidate.parts !== undefined && (!Array.isArray(candidate.parts) || !candidate.parts.every((part) => {
+        if (!part || typeof part !== "object" || Array.isArray(part)) return false;
+        const fields = part as Record<string, unknown>;
+        return isDbSafeText(fields.text)
+            && (fields.label === undefined || isDbSafeText(fields.label))
+            && (fields.marks === undefined || typeof fields.marks === "number");
+    }))) return false;
+    if (candidate.mark_schemes !== undefined && (!Array.isArray(candidate.mark_schemes) || !candidate.mark_schemes.every((scheme) => {
+        if (!scheme || typeof scheme !== "object" || Array.isArray(scheme)) return false;
+        const fields = scheme as Record<string, unknown>;
+        return (fields.part_label === undefined || isDbSafeText(fields.part_label))
+            && (fields.partLabel === undefined || isDbSafeText(fields.partLabel))
+            && (fields.answer === undefined || isDbSafeText(fields.answer))
+            && (fields.marks_breakdown === undefined || isDbSafeText(fields.marks_breakdown))
+            && (fields.marksBreakdown === undefined || isDbSafeText(fields.marksBreakdown));
+    }))) return false;
+    return true;
+}
+
 function parseAiQuestions(text: string): AiGeneratedQuestion[] {
-    const parsed = JSON.parse(extractJsonPayload(text));
-    const items = Array.isArray(parsed) ? parsed : parsed.questions;
-    return Array.isArray(items) ? items : [];
+    const parsed: unknown = JSON.parse(extractJsonPayload(text));
+    if (Array.isArray(parsed)) return parsed.filter(isAiGeneratedQuestion);
+    if (!parsed || typeof parsed !== "object") return [];
+
+    const items = (parsed as Record<string, unknown>).questions;
+    if (Array.isArray(items)) return items.filter(isAiGeneratedQuestion);
+    return isAiGeneratedQuestion(parsed) ? [parsed] : [];
 }
 
 function normalizeQuestionText(text: string) {
@@ -204,19 +242,32 @@ function isPdfNavigationQuestion(item: AiGeneratedQuestion) {
         || /\b(chapitre|chapter)\b.{0,50}\b(commence|commencer|debute|begin|starts?)\b.{0,30}\b(page|sommaire|table des matieres)\b/.test(text);
 }
 
-function isActionableExercise(item: AiGeneratedQuestion) {
+function getExerciseRejectionReason(item: AiGeneratedQuestion): string | undefined {
     const parts = (item.parts ?? []).filter((part) => String(part.text ?? "").trim());
     const statement = String(item.question ?? item.question_text ?? "").trim();
-    if (!parts.length || statement.length < 40) return false;
+    if (!parts.length) return "no exercise parts";
+    if (statement.length < 40) return "statement is too short";
+    const labels = parts.map((part, index) => String(part.label ?? String.fromCharCode(97 + index)).trim().toLowerCase());
+    if (labels.some((label) => !label) || new Set(labels).size !== labels.length) return "part labels are empty or duplicated";
+    const invalidMarks = parts
+        .map((part, index) => ({ label: labels[index], marks: part.marks }))
+        .filter(({ marks }) => !Number.isSafeInteger(marks) || Number(marks) < 1);
+    if (invalidMarks.length) {
+        return `part marks must be positive integers (${invalidMarks.map(({ label, marks }) => `${label}=${String(marks)}`).join(", ")})`;
+    }
+    const totalMarks = parts.reduce((total, part) => total + Number(part.marks), 0);
+    if (!Number.isSafeInteger(totalMarks) || totalMarks > 2_147_483_647) return "total part marks exceed the database limit";
     const actionPattern = /\b(calcul\w*|determin\w*|resolv\w*|simplifi\w*|developp\w*|factoris\w*|montr\w*|demontr\w*|dedui\w*|verifi\w*|justifi\w*|constru\w*|trac\w*|complet\w*|appliqu\w*|effectu\w*|decri\w*|expliqu\w*|compar\w*|identifi\w*|class\w*|represent\w*|etud\w*|prouv\w*|find|calculate|solve|simplify|expand|factor|prove|justify|construct|draw|complete|apply|describe|explain|compare|identify|classify|show)\b|(?:احسب|اوجد|حل|برهن|علل|انشئ|ارسم|اكمل|طبق|اشرح|قارن)/;
     const allPartsAreActionable = parts.every((part) => {
         const text = normalizeQuestionText(part.text ?? "").trim();
-        return actionPattern.test(text) || (text.length >= 20 && text.includes("?"));
+        return actionPattern.test(text)
+            || /\b(dis|donne|indiquer|precise|reponds?|quelle?s?|quel?s?|what|which|state|give|answer)\b/.test(text)
+            || (text.length >= 20 && /[?؟]/.test(text));
     });
-    if (!allPartsAreActionable) return false;
+    if (!allPartsAreActionable) return "at least one part does not state a concrete student task";
 
     const schemes = (item.mark_schemes ?? []).filter((scheme) => String(scheme.answer ?? "").trim());
-    return parts.every((part, index) => {
+    const hasMatchingSchemes = schemes.length === parts.length && parts.every((part, index) => {
         const label = String(part.label ?? String.fromCharCode(97 + index)).trim().toLowerCase();
         return schemes.some((scheme) => {
             const schemeLabel = String(scheme.part_label ?? scheme.partLabel ?? "").trim().toLowerCase();
@@ -224,35 +275,162 @@ function isActionableExercise(item: AiGeneratedQuestion) {
             return schemeLabel === label && breakdown.length > 0;
         });
     });
+    return hasMatchingSchemes ? undefined : "worked solutions or marking breakdowns do not match every part";
 }
 
-function splitTextIntoSourceChunks(file: AiSourceFile, text: string, maxChars: number): AiSourceChunk[] {
-    const chunks: AiSourceChunk[] = [];
+function splitPageText(text: string, maxChars: number) {
+    const chunks: string[] = [];
     let start = 0;
     while (start < text.length) {
         let end = Math.min(start + maxChars, text.length);
         if (end < text.length) {
-            const boundary = Math.max(text.lastIndexOf("\n", end), text.lastIndexOf(" ", end));
+            const boundary = Math.max(
+                text.lastIndexOf("\n\n", end),
+                text.lastIndexOf("\n", end),
+                text.lastIndexOf(". ", end),
+                text.lastIndexOf("? ", end),
+                text.lastIndexOf(" ", end),
+            );
             if (boundary > start + maxChars * 0.7) end = boundary;
         }
         const chunkText = text.slice(start, end).trim();
-        if (chunkText) chunks.push({ file, pageRange: `segment ${chunks.length + 1}`, text: chunkText });
+        if (chunkText) chunks.push(chunkText);
         start = end;
         while (start < text.length && /\s/.test(text[start])) start++;
     }
     return chunks;
 }
 
+function splitTextIntoSourceChunks(file: AiSourceFile, pages: AiPdfPage[], maxChars: number): AiSourceChunk[] {
+    const chunks: AiSourceChunk[] = [];
+    let pendingPages: AiPdfPage[] = [];
+    let pendingLength = 0;
+    const flushPages = () => {
+        if (!pendingPages.length) return;
+        const firstPage = pendingPages[0].pageNumber;
+        const lastPage = pendingPages[pendingPages.length - 1].pageNumber;
+        chunks.push({
+            file,
+            pageRange: firstPage === lastPage ? `page ${firstPage}` : `pages ${firstPage}-${lastPage}`,
+            text: pendingPages.map((page) => `Page ${page.pageNumber}:\n${page.text.trim()}`).join("\n\n"),
+        });
+        pendingPages = [];
+        pendingLength = 0;
+    };
+
+    for (const page of pages) {
+        const pageText = page.text.trim();
+        if (!pageText) continue;
+
+        const prefix = `Page ${page.pageNumber}:\n`;
+        if (prefix.length + pageText.length > maxChars) {
+            flushPages();
+            const pageParts = splitPageText(pageText, Math.max(1, maxChars - prefix.length));
+            pageParts.forEach((part, index) => {
+                chunks.push({
+                    file,
+                    pageRange: `page ${page.pageNumber}${pageParts.length > 1 ? ` (part ${index + 1}/${pageParts.length})` : ""}`,
+                    text: `${prefix}${part}`,
+                });
+            });
+            continue;
+        }
+
+        if (pendingPages.length && pendingLength + 2 + prefix.length + pageText.length > maxChars) {
+            flushPages();
+        }
+        pendingLength += (pendingPages.length ? 2 : 0) + prefix.length + pageText.length;
+        pendingPages.push({ pageNumber: page.pageNumber, text: pageText });
+    }
+
+    flushPages();
+    return chunks;
+}
+
 function scoreTopicRelevance(text: string, topic: string) {
     const normalize = (value: string) => value.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
     const normalizedText = normalize(text);
-    const terms = [...new Set(normalize(topic).split(/[^a-z0-9]+/).filter((term) => term.length > 2))];
-    return terms.reduce((score, term) => score + (normalizedText.includes(term) ? 1 : 0), 0);
+    const stopWords = new Set(["aux", "avec", "dans", "des", "du", "elle", "les", "par", "pour", "que", "qui", "sur", "une", "the", "and"]);
+    const stem = (term: string) => term.length > 4 && term.endsWith("s") ? term.slice(0, -1) : term;
+    const terms = [...new Set(
+        normalize(topic)
+            .split(/[^a-z0-9]+/)
+            .filter((term) => term.length > 2 && !stopWords.has(term))
+            .map(stem),
+    )];
+    if (!terms.length) return 0;
+
+    const textTerms = (normalizedText.match(/[a-z0-9]+/g) ?? []).map(stem);
+    const termCounts = new Map<string, number>();
+    for (const term of textTerms) termCounts.set(term, (termCounts.get(term) ?? 0) + 1);
+
+    let score = normalizedText.includes(normalize(topic).trim()) ? 8 : 0;
+    let matchedTerms = 0;
+    for (const term of terms) {
+        const count = termCounts.get(term) ?? 0;
+        if (!count) continue;
+        matchedTerms++;
+        score += 2 + Math.min(count, 3);
+    }
+    if (terms.length > 1 && matchedTerms === terms.length) score += 4;
+    return score;
 }
 
-function formatAiQuestionText(item: AiGeneratedQuestion, includeParts = false) {
+function isActionableQcm(item: AiGeneratedQuestion) {
     const question = String(item.question ?? item.question_text ?? "").trim();
-    const parts = includeParts && Array.isArray(item.parts)
+    const options = (item.options ?? [])
+        .map((option) => normalizeQuestionText(String(option)).trim().replace(/^[a-z]\s*[.)\-:]\s*/, ""))
+        .filter(Boolean);
+    const answer = String(item.answer ?? "").trim();
+    const breakdown = String(item.marks_breakdown ?? "").trim();
+    const normalizedAnswer = normalizeQuestionText(answer);
+    const answerLetter = normalizedAnswer.match(/^(?:option\s*)?([a-z])(?:[.)\s:\-]|$)/)?.[1];
+    const answerMatchesOption = options.some((option) => normalizedAnswer.includes(option))
+        || Boolean(answerLetter && options[answerLetter.charCodeAt(0) - 97]);
+    return question.length >= 20
+        && new Set(options).size >= 3
+        && answerMatchesOption
+        && Boolean(breakdown);
+}
+
+function hasExpectedQuestionShape(item: AiGeneratedQuestion, type: AiQuestionType) {
+    const hasOptions = (item.options ?? []).some((option) => String(option).trim());
+    const hasParts = (item.parts ?? []).some((part) => String(part.text ?? "").trim());
+    const hasMarkSchemes = (item.mark_schemes ?? []).some((scheme) => String(scheme.answer ?? "").trim());
+    const hasStandaloneAnswer = Boolean(String(item.answer ?? item.marks_breakdown ?? "").trim());
+    return type === "QCM"
+        ? !hasParts && !hasMarkSchemes
+        : !hasOptions && !hasStandaloneAnswer;
+}
+
+function isActionableRedaction(item: AiGeneratedQuestion) {
+    const statement = String(item.question ?? item.question_text ?? "").trim();
+    const parts = (item.parts ?? []).filter((part) => String(part.text ?? "").trim());
+    if (statement.length < 40 || !parts.length) return false;
+    const labels = parts.map((part, index) => String(part.label ?? String.fromCharCode(97 + index)).trim().toLowerCase());
+    if (labels.some((label) => !label) || new Set(labels).size !== labels.length) return false;
+    const totalMarks = parts.reduce((total, part) => total + Number(part.marks), 0);
+    if (parts.some((part) => !Number.isSafeInteger(part.marks) || Number(part.marks) < 1)
+        || !Number.isSafeInteger(totalMarks)
+        || totalMarks > 2_147_483_647) return false;
+
+    const writingTaskPattern = /\b(redig\w*|ecri\w*|formul\w*|argument\w*|discut\w*|expliqu\w*|present\w*|analy\w*|compar\w*|decri\w*|justifi\w*|prouv\w*|demonstr\w*|write|compose|argue|discuss|explain|present|analyze|analyse|compare|describe|justify)\b|(?:اكتب|حرر|ناقش|اشرح|حلل|قارن)/;
+    const schemes = (item.mark_schemes ?? []).filter((scheme) => String(scheme.answer ?? "").trim());
+    return schemes.length === parts.length
+        && parts.every((part) => writingTaskPattern.test(normalizeQuestionText(part.text ?? "")))
+        && parts.every((part, index) => {
+            const label = String(part.label ?? String.fromCharCode(97 + index)).trim().toLowerCase();
+            return schemes.some((scheme) => {
+                const schemeLabel = String(scheme.part_label ?? scheme.partLabel ?? "").trim().toLowerCase();
+                const breakdown = String(scheme.marks_breakdown ?? scheme.marksBreakdown ?? "").trim();
+                return schemeLabel === label && breakdown.length > 0;
+            });
+        });
+}
+
+function formatAiQuestionText(item: AiGeneratedQuestion, type: AiQuestionType) {
+    const question = String(item.question ?? item.question_text ?? "").trim();
+    const parts = type !== "QCM" && Array.isArray(item.parts)
         ? item.parts
             .map((part, index) => ({
                 label: String(part.label ?? String.fromCharCode(97 + index)),
@@ -263,7 +441,7 @@ function formatAiQuestionText(item: AiGeneratedQuestion, includeParts = false) {
     const statement = parts.length
         ? `${question}\n\n${parts.map((part) => `${part.label}. ${part.text}`).join("\n")}`
         : question;
-    const options = Array.isArray(item.options)
+    const options = type === "QCM" && Array.isArray(item.options)
         ? item.options
             .map((option) => String(option).trim().replace(/^[A-Z]\s*[.)\-:]\s*/i, ""))
             .filter(Boolean)
@@ -272,20 +450,104 @@ function formatAiQuestionText(item: AiGeneratedQuestion, includeParts = false) {
     return `${statement}\n\n${options.map((option, index) => `${String.fromCharCode(65 + index)}. ${option}`).join("\n")}`;
 }
 
-function normalizeAiQuestionType(type: string | undefined, options: string[]): "Exercice" | "QCM" | "Probleme" | "Redaction" {
+function normalizeAiQuestionType(type: string | undefined): AiQuestionType | undefined {
     const normalized = (type ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
     if (normalized === "qcm" || normalized === "multiple choice") return "QCM";
     if (normalized === "probleme" || normalized === "problem") return "Probleme";
     if (normalized === "redaction" || normalized === "essay") return "Redaction";
     if (normalized === "exercice" || normalized === "exercise") return "Exercice";
-    return options.length ? "QCM" : "Exercice";
+    return undefined;
+}
+
+function normalizeAiQuestionStatus(status: unknown): AiQuestionStatus | undefined {
+    return AI_QUESTION_STATUSES.find((candidate) => candidate === status);
+}
+
+function normalizeAiDifficultyStrict(difficulty: string | undefined): "facile" | "moyen" | "difficile" | undefined {
+    const normalized = (difficulty ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
+    if (normalized === "facile" || normalized === "easy") return "facile";
+    if (normalized === "moyen" || normalized === "moyenne" || normalized === "medium" || normalized === "normal") return "moyen";
+    if (normalized === "difficile" || normalized === "hard") return "difficile";
+    return undefined;
 }
 
 function normalizeAiDifficulty(difficulty: string | undefined, fallback: string): "facile" | "moyen" | "difficile" {
-    const normalized = (difficulty ?? fallback).normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim().toLowerCase();
-    if (normalized === "facile" || normalized === "easy") return "facile";
-    if (normalized === "difficile" || normalized === "hard") return "difficile";
-    return "moyen";
+    return normalizeAiDifficultyStrict(difficulty)
+        ?? normalizeAiDifficultyStrict(fallback)
+        ?? "moyen";
+}
+
+function buildAiQuestionPrompt(
+    type: AiQuestionType,
+    details: { subject: string; gradeLevel: string; topic: string; difficulty: string; language: string },
+) {
+    const topic = JSON.stringify(details.topic);
+    const difficulty = JSON.stringify(details.difficulty);
+    const instructions: Record<AiQuestionType, string> = {
+        QCM: "Write one clear, unambiguous multiple-choice question. Include at least three substantive, distinct options with plausible distractors based on common misconceptions. Exactly one option must be correct. Verify the answer from the source before responding. Put the exact correct option, including its letter, in answer, and put a concise source-grounded explanation in marks_breakdown. Do not include parts or mark_schemes.",
+        Exercice: "Write a complete student-facing exercise. The question is the introduction and must include all needed context and given data. Put every concrete student task in parts; do not use a vague lead-in such as 'answer the following questions' without writing the tasks. Provide a correct worked solution and marking breakdown for every part, with matching labels in mark_schemes. Verify each solution independently and check that all given facts are mutually consistent before responding. For probability, verify that P(A∩B) is no greater than either event probability and that incompatible events have intersection probability zero. Never describe events with a positive intersection as incompatible. Do not include options.",
+        Probleme: "Write a complete, solvable multi-step problem with a coherent context, all necessary data and units, and a clear objective. Put explicit, logically ordered tasks in parts. Check that the supplied data are sufficient and the result is mathematically consistent. Provide a worked solution and marking breakdown for every part, with matching labels in mark_schemes. Verify the final result and units. Do not include options.",
+        Redaction: "Write a focused, specific writing assignment that tells the student exactly what to explain, discuss, prove, or argue; avoid a vague generic prompt. Put the writing task and any required criteria in parts. For every part, provide the expected key ideas and a rubric in mark_schemes with matching labels. Do not include options.",
+    };
+    const schemas: Record<AiQuestionType, string> = {
+        QCM: `{"question":"A clear question with all required data","topic":${topic},"type":"QCM","difficulty":${difficulty},"options":["A. First plausible choice","B. Correct choice","C. Another plausible choice"],"answer":"B. Correct choice","marks_breakdown":"Why B is correct, based on the source"}`,
+        Exercice: `{"question":"A concise introduction with all necessary data","topic":${topic},"type":"Exercice","difficulty":${difficulty},"parts":[{"label":"a","text":"A concrete task the student must perform","marks":2},{"label":"b","text":"A second concrete task","marks":2}],"mark_schemes":[{"part_label":"a","answer":"Worked solution for a","marks_breakdown":"How marks are awarded for a"},{"part_label":"b","answer":"Worked solution for b","marks_breakdown":"How marks are awarded for b"}]}`,
+        Probleme: `{"question":"A complete, realistic context with all given values and units","topic":${topic},"type":"Probleme","difficulty":${difficulty},"parts":[{"label":"a","text":"A precise first task","marks":2},{"label":"b","text":"A precise follow-up task","marks":2}],"mark_schemes":[{"part_label":"a","answer":"Worked solution for a","marks_breakdown":"How marks are awarded for a"},{"part_label":"b","answer":"Worked solution for b","marks_breakdown":"How marks are awarded for b"}]}`,
+        Redaction: `{"question":"A specific writing assignment","topic":${topic},"type":"Redaction","difficulty":${difficulty},"parts":[{"label":"a","text":"Write a structured explanation with a clear scope and criteria","marks":4}],"mark_schemes":[{"part_label":"a","answer":"Expected key ideas","marks_breakdown":"Rubric for assessing the response"}]}`,
+    };
+    const shapeRule = type === "QCM"
+        ? "Do not include parts or mark_schemes."
+        : "Do not include options. Include parts and matching mark_schemes only.";
+    return `Generate exactly one ${type} for ${details.subject}, level ${details.gradeLevel}, chapter ${topic}. Keep it strictly about this chapter and use only facts and methods supported by the source excerpt. ${instructions[type]} Write all student-facing text in ${details.language}.\n\nReturn only one valid JSON object matching this exact type and this shape, with no markdown or surrounding text. The type field must be exactly "${type}". ${shapeRule}\n${schemas[type]}\nIf the excerpt does not contain enough information for a valid question, return an empty JSON array.`;
+}
+
+function buildAiResponseSchema(type: AiQuestionType) {
+    if (type !== "Exercice" && type !== "Probleme") return undefined;
+    const questionSchema = {
+        type: "object",
+        properties: {
+            question: { type: "string" },
+            topic: { type: "string" },
+            type: { type: "string", enum: [type] },
+            difficulty: { type: "string" },
+            parts: {
+                type: "array",
+                minItems: 1,
+                items: {
+                    type: "object",
+                    properties: {
+                        label: { type: "string" },
+                        text: { type: "string" },
+                        marks: { type: "integer", minimum: 1 },
+                    },
+                    required: ["label", "text", "marks"],
+                    additionalProperties: false,
+                },
+            },
+            mark_schemes: {
+                type: "array",
+                minItems: 1,
+                items: {
+                    type: "object",
+                    properties: {
+                        part_label: { type: "string" },
+                        answer: { type: "string" },
+                        marks_breakdown: { type: "string" },
+                    },
+                    required: ["part_label", "answer", "marks_breakdown"],
+                    additionalProperties: false,
+                },
+            },
+        },
+        required: ["question", "topic", "type", "difficulty", "parts", "mark_schemes"],
+        additionalProperties: false,
+    };
+    return {
+        anyOf: [
+            { type: "array", maxItems: 0 },
+            questionSchema,
+        ],
+    };
 }
 
 @Injectable()
@@ -576,9 +838,13 @@ export class AdminService {
         const subject = String(body.subject ?? "Mathématiques");
         const topic = String(body.topic ?? "").trim();
         const count = Number(body.count);
+        const status = normalizeAiQuestionStatus(body.status ?? "draft");
         const submittedTypes: unknown[] = Array.isArray(body.types) ? body.types : [];
         if (!Number.isInteger(count) || count < 1 || count > 50) {
             apiError(HttpStatus.BAD_REQUEST, "QUESTION_COUNT_INVALID", "Le nombre de questions doit être compris entre 1 et 50.");
+        }
+        if (!status) {
+            apiError(HttpStatus.BAD_REQUEST, "QUESTION_STATUS_INVALID", "Le statut de question demandé n'est pas valide.");
         }
         if (!submittedTypes.length || submittedTypes.some((type) => typeof type !== "string" || !AI_QUESTION_TYPES.includes(type as AiQuestionType))) {
             apiError(HttpStatus.BAD_REQUEST, "QUESTION_TYPES_INVALID", "Sélectionnez au moins un type de question valide.");
@@ -599,7 +865,7 @@ export class AdminService {
             select: { id: true },
         });
         if (!chapter) apiError(HttpStatus.BAD_REQUEST, "CHAPTER_INVALID", "Le chapitre choisi n'existe pas pour ce niveau, cette section et cette matière.");
-        const generationRequest = { ...body, gradeLevel, sectionKey, subject, topic, count, types };
+        const generationRequest = { ...body, gradeLevel, sectionKey, subject, topic, count, types, status };
 
         if (process.env.ENABLE_AI !== "true") {
             return {
@@ -666,6 +932,8 @@ export class AdminService {
             if (job) Object.assign(job, updates, { updatedAt: Date.now() });
         };
         const files = body.files as AiSourceFile[];
+        const status = normalizeAiQuestionStatus(body.status);
+        if (!status) apiError(HttpStatus.INTERNAL_SERVER_ERROR, "AI_STATUS_INVALID", "Le statut de génération est invalide.");
         const meta = {
             gradeLevel: String(body.gradeLevel ?? "bac"),
             sectionKey: String(body.sectionKey ?? ""),
@@ -674,19 +942,19 @@ export class AdminService {
             count: Number(body.count),
             types: body.types as AiQuestionType[],
             difficulty: String(body.difficulty ?? "moyen"),
-            status: String(body.status ?? "draft"),
+            status,
             language: String(body.language ?? "Français"),
         };
-        const model = String(process.env.OLLAMA_MODEL ?? "qwen2.5:7b");
-        const baseUrl = (process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11434").replace(/\/$/, "");
+        const model = String(process.env.OLLAMA_MODEL ?? "qwen3:8b");
+        const baseUrl = (process.env.OLLAMA_BASE_URL ?? "http://127.0.0.1:11435").replace(/\/$/, "");
         const timeout = Number(process.env.OLLAMA_TIMEOUT_MS ?? 600_000);
 
         const sourceChunks: AiSourceChunk[] = [];
         for (const file of files) {
             const isPdf = file.mimeType?.toLowerCase() === "application/pdf" || file.name.toLowerCase().endsWith(".pdf");
             if (!isPdf) apiError(HttpStatus.BAD_REQUEST, "PDF_REQUIRED", "Ollama nécessite des fichiers PDF pour extraire le texte.");
-            const text = await extractFullPdfText(file);
-            sourceChunks.push(...splitTextIntoSourceChunks(file, text, 1800));
+            const pages = await extractPdfPages(file);
+            sourceChunks.push(...splitTextIntoSourceChunks(file, pages, 1800));
         }
         if (!sourceChunks.length) apiError(HttpStatus.UNPROCESSABLE_ENTITY, "PDF_TEXT_UNAVAILABLE", "Aucun texte extractible dans les documents fournis.");
         const rankedSourceIndices = sourceChunks
@@ -702,7 +970,14 @@ export class AdminService {
             totalChunks: meta.count,
         });
 
-        const generateContent = async (instruction: string, maxOutputTokens: number, operation: string, documentText = "", jsonMode = false) => {
+        const generateContent = async (
+            instruction: string,
+            maxOutputTokens: number,
+            operation: string,
+            documentText = "",
+            jsonMode = false,
+            responseFormat: "json" | Record<string, unknown> = "json",
+        ) => {
             const content = documentText ? `${instruction}\n\nDocument:\n${documentText}` : instruction;
             let response: Response;
             try {
@@ -713,7 +988,7 @@ export class AdminService {
                         model,
                         messages: [{ role: "user", content }],
                         stream: false,
-                        ...(jsonMode ? { format: "json" } : {}),
+                        ...(jsonMode ? { format: responseFormat, think: false } : {}),
                         options: { temperature: 0.2, num_predict: maxOutputTokens },
                     }),
                     signal: AbortSignal.timeout(timeout),
@@ -732,37 +1007,39 @@ export class AdminService {
             return { text: String(data.message?.content ?? "") };
         };
 
-        const chapterInstruction = `Generate every question only about the selected chapter "${meta.topic}". Set the topic field of every item to exactly "${meta.topic}". Do not use other chapters.`;
         const generated: AiGeneratedQuestion[] = [];
         const rawResponses: string[] = [];
-        const maxSourceAttempts = Math.min(sourceChunks.length, 5);
+        const maxSourceAttempts = 2;
         for (let questionIndex = 0; questionIndex < meta.count; questionIndex++) {
-            const preferredSourceIndex = questionIndex % Math.min(rankedSourceIndices.length, maxSourceAttempts);
+            const preferredSourceIndex = questionIndex % rankedSourceIndices.length;
             const requestedType = meta.types[questionIndex % meta.types.length];
-            const typeRequirements = requestedType === "Exercice"
-                ? "Create a complete, student-facing exercise in this single JSON item. The question field must contain the full exercise statement: a concise context, all givens/data needed, and a clear lead-in. The parts array must then contain every actual subquestion, each as a concrete task (calculate, solve, prove, construct, explain, justify, etc.); never leave 'answer the following questions' without writing those questions. The mark_schemes array must provide a worked answer/correction and marks breakdown for EVERY part, with matching part_label values. Do not put the correction in the question statement."
-                : requestedType === "QCM"
-                    ? "Create a substantive question that tests the selected chapter, not document recall. Put the statement in question and each plain answer choice in options. Include at least two plausible options and identify the correct choice in the mark scheme."
-                    : requestedType === "Probleme"
-                        ? "Create a complete, solvable problem with a concrete scenario, all necessary givens, and explicit tasks in parts. Include the expected solution and marking scheme."
-                        : "Create a specific writing prompt about the selected chapter that tells the student what to explain, discuss, or demonstrate. Include useful criteria or subparts and a matching marking scheme.";
             let acceptedQuestion: AiGeneratedQuestion | undefined;
+            let retryFeedback = "";
             for (let sourceAttempt = 0; sourceAttempt < maxSourceAttempts; sourceAttempt++) {
-                const sourceIndex = rankedSourceIndices[(preferredSourceIndex + sourceAttempt) % rankedSourceIndices.length];
+                const sourceIndex = retryFeedback
+                    ? rankedSourceIndices[preferredSourceIndex]
+                    : rankedSourceIndices[(preferredSourceIndex + sourceAttempt) % rankedSourceIndices.length];
                 const sourceChunk = sourceChunks[sourceIndex];
                 const sourceExcerpt = `Document: ${sourceChunk.file.name}\nSource ${sourceChunk.pageRange}:\n${sourceChunk.text}`;
-                const prompt = `Generate exactly one useful ${requestedType} for a student studying ${meta.subject}, level ${meta.gradeLevel}, chapter "${meta.topic}". ${chapterInstruction}\n\n${typeRequirements}\n\nNever ask where a chapter appears in the PDF. Do not ask about page numbers, the table of contents, headings, chapter order, or any other document-navigation or document-format detail. Ask about the subject matter only. Do not produce generic opening text such as "Concerning ... answer the following questions" unless the actual concrete questions are included in parts. Write all student-facing text in ${meta.language}.\n\nReturn only a valid JSON array containing exactly one item, with no markdown fences or surrounding text. Use this structure:\n{"question":"Complete student-facing exercise statement with all necessary context and givens","topic":"${meta.topic}","type":"${requestedType}","difficulty":"${meta.difficulty}","parts":[{"label":"a","text":"A specific task the student must perform","marks":2},{"label":"b","text":"Another specific task","marks":2}],"mark_schemes":[{"part_label":"a","answer":"Worked correction for part a","marks_breakdown":"How marks are awarded for part a"},{"part_label":"b","answer":"Worked correction for part b","marks_breakdown":"How marks are awarded for part b"}],"options":["Choice A","Choice B"]}\nFor Exercice, include all parts and matching worked corrections in this one item. Use only facts and methods supported by the source excerpt; do not invent facts. If this excerpt does not contain enough subject-matter information, return an empty JSON array so another excerpt can be tried.`;
+                const prompt = `${buildAiQuestionPrompt(requestedType, meta)}${retryFeedback}`;
                 updateJob({
                     status: "generating",
-                    progress: 20 + Math.round((questionIndex / meta.count) * 65),
-                    message: `Génération question ${questionIndex + 1}/${meta.count}`,
+                    progress: 20 + Math.round(((questionIndex + sourceAttempt / maxSourceAttempts) / meta.count) * 65),
+                    message: `Génération question ${questionIndex + 1}/${meta.count} (tentative ${sourceAttempt + 1}/${maxSourceAttempts})`,
                     currentChunk: questionIndex + 1,
                     totalChunks: meta.count,
                 });
                 let raw: string;
                 try {
                     const outputTokenLimit = requestedType === "Exercice" || requestedType === "Probleme" ? 1536 : 768;
-                    const response = await generateContent(prompt, outputTokenLimit, `question ${questionIndex + 1}/${meta.count}, source ${sourceIndex + 1}/${sourceChunks.length}`, sourceExcerpt, true);
+                    const response = await generateContent(
+                        prompt,
+                        outputTokenLimit,
+                        `question ${questionIndex + 1}/${meta.count}, source ${sourceIndex + 1}/${sourceChunks.length}`,
+                        sourceExcerpt,
+                        true,
+                        buildAiResponseSchema(requestedType) ?? "json",
+                    );
                     raw = response.text;
                 } catch (error) {
                     if (sourceAttempt + 1 < maxSourceAttempts && error instanceof Error && /repeat limit/i.test(error.message)) {
@@ -797,13 +1074,52 @@ export class AdminService {
                     });
                     continue;
                 }
+                if (batchQuestions.length !== 1) {
+                    console.warn("[Ollama] Rejected response with an unexpected question count", {
+                        question: questionIndex + 1,
+                        count: batchQuestions.length,
+                        source: sourceChunk.file.name,
+                        pageRange: sourceChunk.pageRange,
+                    });
+                    continue;
+                }
                 const candidate = batchQuestions[0];
-                const candidateOptions = Array.isArray(candidate.options) ? candidate.options.filter(Boolean) : [];
-                if (normalizeAiQuestionType(candidate.type, candidateOptions) !== requestedType) {
+                if (normalizeAiQuestionType(candidate.type) !== requestedType) {
                     console.warn("[Ollama] Rejected question with an unexpected type", {
                         question: questionIndex + 1,
                         expectedType: requestedType,
                         receivedType: candidate.type,
+                        source: sourceChunk.file.name,
+                        pageRange: sourceChunk.pageRange,
+                    });
+                    continue;
+                }
+                const normalizedTopic = (value: string) => normalizeQuestionText(value).trim().replace(/\s+/g, " ");
+                if (!candidate.topic || normalizedTopic(candidate.topic) !== normalizedTopic(meta.topic)) {
+                    console.warn("[Ollama] Rejected question with an unexpected topic", {
+                        question: questionIndex + 1,
+                        expectedTopic: meta.topic,
+                        receivedTopic: candidate.topic,
+                        source: sourceChunk.file.name,
+                        pageRange: sourceChunk.pageRange,
+                    });
+                    continue;
+                }
+                const requestedDifficulty = normalizeAiDifficultyStrict(meta.difficulty) ?? normalizeAiDifficulty(meta.difficulty, "moyen");
+                if (normalizeAiDifficultyStrict(candidate.difficulty) !== requestedDifficulty) {
+                    console.warn("[Ollama] Rejected question with an unexpected difficulty", {
+                        question: questionIndex + 1,
+                        expectedDifficulty: requestedDifficulty,
+                        receivedDifficulty: candidate.difficulty,
+                        source: sourceChunk.file.name,
+                        pageRange: sourceChunk.pageRange,
+                    });
+                    continue;
+                }
+                if (!hasExpectedQuestionShape(candidate, requestedType)) {
+                    console.warn("[Ollama] Rejected response with mixed question fields", {
+                        question: questionIndex + 1,
+                        type: requestedType,
                         source: sourceChunk.file.name,
                         pageRange: sourceChunk.pageRange,
                     });
@@ -818,12 +1134,33 @@ export class AdminService {
                     });
                     continue;
                 }
-                if (requestedType === "Exercice" && !isActionableExercise(candidate)) {
-                    console.warn("[Ollama] Rejected non-actionable exercise", {
+                if (requestedType === "QCM" && !isActionableQcm(candidate)) {
+                    console.warn("[Ollama] Rejected incomplete QCM", {
                         question: questionIndex + 1,
                         source: sourceChunk.file.name,
                         pageRange: sourceChunk.pageRange,
+                    });
+                    continue;
+                }
+                const exerciseRejectionReason = requestedType === "Exercice" || requestedType === "Probleme"
+                    ? getExerciseRejectionReason(candidate)
+                    : undefined;
+                if (exerciseRejectionReason) {
+                    console.warn(`[Ollama] Rejected incomplete ${requestedType.toLowerCase()}`, {
+                        question: questionIndex + 1,
+                        source: sourceChunk.file.name,
+                        pageRange: sourceChunk.pageRange,
+                        reason: exerciseRejectionReason,
                         responsePreview: raw.slice(0, 300),
+                    });
+                    retryFeedback = `\n\nYour previous attempt was rejected because ${exerciseRejectionReason}. Generate a different, fully valid ${requestedType}: every part must include marks as a JSON integer greater than or equal to 1 (never a decimal or string), and each part needs one matching worked solution and marking breakdown. Recheck all mathematical facts for contradictions before returning JSON.`;
+                    continue;
+                }
+                if (requestedType === "Redaction" && !isActionableRedaction(candidate)) {
+                    console.warn("[Ollama] Rejected incomplete writing prompt", {
+                        question: questionIndex + 1,
+                        source: sourceChunk.file.name,
+                        pageRange: sourceChunk.pageRange,
                     });
                     continue;
                 }
@@ -831,108 +1168,135 @@ export class AdminService {
                 break;
             }
             if (!acceptedQuestion) {
-                apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_QUESTION_UNSUITABLE", `Impossible de générer une question ${requestedType} exploitable pour « ${meta.topic} » après ${maxSourceAttempts} extraits. Vérifiez que le PDF contient assez de matière sur ce chapitre.`);
+                apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_QUESTION_UNSUITABLE", `Impossible de générer une question ${requestedType} exploitable pour « ${meta.topic} » après ${maxSourceAttempts} tentatives. Vérifiez que le PDF contient assez de matière sur ce chapitre.`);
             }
             generated.push(acceptedQuestion!);
         }
         const raw = rawResponses.join("\n\n");
 
         updateJob({ status: "saving", progress: 92, message: "Enregistrement des questions" });
-        const saved = [];
-        for (const item of generated!) {
-            const options = Array.isArray(item.options) ? item.options.filter(Boolean) : [];
-            const type = normalizeAiQuestionType(item.type, options);
-            const questionText = formatAiQuestionText(item, type === "Exercice" || type === "Probleme" || type === "Redaction");
-            if (!questionText) continue;
-            if (!meta.types.includes(type)) {
-                apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_TYPE_NOT_SELECTED", `L'IA a renvoyé le type ${type}, qui n'a pas été sélectionné.`);
-            }
-            const parts = (Array.isArray(item.parts) ? item.parts : [])
-                .filter((part) => String(part.text ?? "").trim())
-                .map((part, index) => ({
-                    label: String(part.label ?? String.fromCharCode(97 + index)),
-                    text: String(part.text).trim(),
-                    marks: Number.isFinite(Number(part.marks)) && Number(part.marks) > 0 ? Number(part.marks) : 1,
-                    orderIndex: index,
-                }));
-            const savedParts = parts.length ? parts : [{
-                label: "a",
-                text: options.length ? "Choisissez la bonne réponse." : questionText,
-                marks: 1,
-                orderIndex: 0,
-            }];
-            const suppliedMarkSchemes = Array.isArray(item.mark_schemes) ? item.mark_schemes : [];
-            const markSchemes = suppliedMarkSchemes
-                .map((scheme, index) => ({
-                    partLabel: String(scheme.part_label ?? scheme.partLabel ?? savedParts[index]?.label ?? "a"),
-                    answer: String(scheme.answer ?? "").trim(),
-                    marksBreakdown: scheme.marks_breakdown ?? scheme.marksBreakdown ?? null,
-                    orderIndex: index,
-                }))
-                .filter((scheme) => scheme.answer);
-            if (!markSchemes.length) {
-                const answer = String(item.answer ?? "").trim();
-                if (answer) {
-                    markSchemes.push({
-                        partLabel: savedParts[0].label,
-                        answer,
-                        marksBreakdown: item.marks_breakdown ?? null,
-                        orderIndex: 0,
+        const saved = await this.prisma.$transaction(async (tx) => {
+            const questions: Prisma.QuestionGetPayload<{ include: { parts: true; markSchemes: true } }>[] = [];
+            for (const item of generated!) {
+                const type = normalizeAiQuestionType(item.type);
+                if (!type) apiError(HttpStatus.INTERNAL_SERVER_ERROR, "AI_TYPE_INVALID", "L'IA a renvoyé un type de question invalide.");
+                if (!meta.types.includes(type)) {
+                    apiError(HttpStatus.INTERNAL_SERVER_ERROR, "AI_TYPE_NOT_SELECTED", `L'IA a renvoyé le type ${type}, qui n'a pas été sélectionné.`);
+                }
+
+                const options = type === "QCM" ? (item.options ?? []).map((option) => option.trim()).filter(Boolean) : [];
+                const questionText = formatAiQuestionText(item, type).trim();
+                if (!questionText) apiError(HttpStatus.INTERNAL_SERVER_ERROR, "AI_QUESTION_TEXT_INVALID", "L'IA a renvoyé un énoncé vide.");
+                if (type === "QCM" && (options.length < 3 || new Set(options.map(normalizeQuestionText)).size !== options.length)) {
+                    apiError(HttpStatus.INTERNAL_SERVER_ERROR, "AI_QCM_OPTIONS_INVALID", "Les choix du QCM ne sont pas valides.");
+                }
+
+                const sourceParts = type === "QCM" ? [] : item.parts ?? [];
+                if (type !== "QCM" && !sourceParts.length) {
+                    apiError(HttpStatus.INTERNAL_SERVER_ERROR, "AI_QUESTION_PARTS_INVALID", "La question générée n'a pas de parties valides.");
+                }
+                const parts = sourceParts.map((part, index) => {
+                    const label = String(part.label ?? String.fromCharCode(97 + index)).trim();
+                    const text = String(part.text ?? "").trim();
+                    const marks = part.marks;
+                    if (!label || !text || typeof marks !== "number" || !Number.isSafeInteger(marks) || marks < 1) {
+                        apiError(HttpStatus.INTERNAL_SERVER_ERROR, "AI_QUESTION_PART_INVALID", "Une partie générée contient des valeurs incompatibles avec la base.");
+                    }
+                    return { label, text, marks, orderIndex: index };
+                });
+                const savedParts = type === "QCM"
+                    ? [{ label: "a", text: "Choisissez la bonne réponse.", marks: 1, orderIndex: 0 }]
+                    : parts;
+                const totalMarks = savedParts.reduce((total, part) => total + part.marks, 0);
+                if (!Number.isSafeInteger(totalMarks) || totalMarks > 2_147_483_647) {
+                    apiError(HttpStatus.INTERNAL_SERVER_ERROR, "AI_TOTAL_MARKS_INVALID", "Le total de points ne peut pas être enregistré.");
+                }
+
+                let markSchemes: { partLabel: string; answer: string; marksBreakdown: string | null; orderIndex: number }[];
+                if (type === "QCM") {
+                    const answer = String(item.answer ?? "").trim();
+                    const marksBreakdown = String(item.marks_breakdown ?? "").trim();
+                    if (!answer || !marksBreakdown) {
+                        apiError(HttpStatus.INTERNAL_SERVER_ERROR, "AI_QCM_ANSWER_INVALID", "La réponse ou l'explication du QCM est vide.");
+                    }
+                    markSchemes = [{ partLabel: "a", answer, marksBreakdown, orderIndex: 0 }];
+                } else {
+                    const suppliedSchemes = item.mark_schemes ?? [];
+                    if (suppliedSchemes.length !== parts.length) {
+                        apiError(HttpStatus.INTERNAL_SERVER_ERROR, "AI_MARK_SCHEMES_INVALID", "Les corrections ne correspondent pas aux parties de la question.");
+                    }
+                    markSchemes = suppliedSchemes.map((scheme, index) => {
+                        const requestedLabel = String(scheme.part_label ?? scheme.partLabel ?? "").trim().toLowerCase();
+                        const part = parts.find((candidate) => candidate.label.toLowerCase() === requestedLabel);
+                        const answer = String(scheme.answer ?? "").trim();
+                        const marksBreakdown = String(scheme.marks_breakdown ?? scheme.marksBreakdown ?? "").trim();
+                        if (!part || !answer || !marksBreakdown) {
+                            apiError(HttpStatus.INTERNAL_SERVER_ERROR, "AI_MARK_SCHEME_INVALID", "Une correction générée est vide ou ne correspond à aucune partie.");
+                        }
+                        return { partLabel: part.label, answer, marksBreakdown, orderIndex: index };
                     });
                 }
-            }
-            if (type === "QCM" && options.length < 2) {
-                apiError(HttpStatus.UNPROCESSABLE_ENTITY, "AI_QCM_OPTIONS_MISSING", "Une question QCM doit contenir au moins deux choix.");
-            }
-            const question = await this.prisma.question.create({
-                data: {
-                    origin: "ai_admin",
-                    status: meta.status as any,
-                    createdById: actor.id,
-                    gradeLevel: meta.gradeLevel,
-                    sectionKey: meta.sectionKey,
-                    subject: meta.subject,
-                    topic: meta.topic,
-                    type,
-                    difficulty: normalizeAiDifficulty(item.difficulty, meta.difficulty),
-                    language: meta.language,
-                    questionText,
-                    context: `AI generated from: ${files.map((file) => file.name).join(", ")}`,
-                    totalMarks: savedParts.reduce((total, part) => total + part.marks, 0),
-                    estimatedTimeMinutes: 2,
-                    publishedAt: meta.status === "published" ? new Date() : null,
-                    parts: { create: savedParts },
-                    markSchemes: { create: markSchemes },
-                },
-                include: { parts: true, markSchemes: true },
-            });
-            saved.push(question);
-        }
 
-        for (const file of files) {
-            await this.prisma.knowledgeBaseFile.create({
+                questions.push(await tx.question.create({
+                    data: {
+                        origin: "ai_admin",
+                        status: meta.status,
+                        createdById: actor.id,
+                        gradeLevel: meta.gradeLevel,
+                        sectionKey: meta.sectionKey,
+                        subject: meta.subject,
+                        topic: meta.topic,
+                        type,
+                        difficulty: normalizeAiDifficulty(item.difficulty, meta.difficulty),
+                        language: meta.language,
+                        questionText,
+                        context: `AI generated from: ${files.map((file) => file.name).join(", ")}`,
+                        totalMarks,
+                        estimatedTimeMinutes: 2,
+                        publishedAt: meta.status === "published" ? new Date() : null,
+                        parts: { create: savedParts },
+                        markSchemes: { create: markSchemes },
+                    },
+                    include: { parts: true, markSchemes: true },
+                }));
+            }
+
+            for (const file of files) {
+                await tx.knowledgeBaseFile.create({
+                    data: {
+                        fileName: file.name,
+                        storageKey: `ai-inline/${randomUUID()}-${file.name}`,
+                        contentType: file.mimeType || "application/pdf",
+                        subject: meta.subject,
+                        gradeLevel: meta.gradeLevel,
+                        sectionKey: meta.sectionKey,
+                        topic: meta.topic,
+                        status: "ready",
+                        questionsCount: questions.length,
+                        uploadedById: actor.id,
+                        processedAt: new Date(),
+                    },
+                });
+            }
+
+            await tx.auditLog.create({
                 data: {
-                    fileName: file.name,
-                    storageKey: `ai-inline/${Date.now()}-${file.name}`,
-                    contentType: file.mimeType || "application/pdf",
-                    subject: meta.subject,
-                    gradeLevel: meta.gradeLevel,
-                    sectionKey: meta.sectionKey,
-                    topic: meta.topic,
-                    status: "ready",
-                    questionsCount: saved.length,
-                    uploadedById: actor.id,
-                    processedAt: new Date(),
+                    actorId: actor.id,
+                    action: "ai_generate_questions",
+                    entity: "question",
+                    entityId: questions[0]?.id ?? null,
+                    metadata: {
+                        model,
+                        files: files.map((file) => ({ name: file.name, mimeType: file.mimeType })),
+                        sourceSegments: sourceChunks.length,
+                        count: questions.length,
+                    } as Prisma.InputJsonValue,
+                    ip,
                 },
             });
-        }
+            return questions;
+        }, { maxWait: 10_000, timeout: 60_000 });
 
-        await this.audit(actor, ip, "ai_generate_questions", "question", saved[0]?.id, {
-            model,
-            files: files.map((file) => ({ name: file.name, mimeType: file.mimeType })),
-            sourceSegments: sourceChunks.length,
-            count: saved.length,
-        });
         const result = { persisted: true, raw, questions: saved };
         updateJob({ status: "completed", progress: 100, message: "Document lu et questions enregistrees", result });
         return result;

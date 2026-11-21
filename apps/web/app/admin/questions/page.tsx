@@ -411,7 +411,7 @@ function QuestionsInner() {
                         <div className="mt-3 space-y-3 border-l-2 border-primary/20 pl-4">
                           {q.markSchemes.map((scheme: any) => (
                             <div key={scheme.id}>
-                              <p className="text-sm font-semibold">Partie {scheme.partLabel}</p>
+                              <p className="text-sm font-semibold">{q.type === "QCM" ? "Bonne réponse" : `Partie ${scheme.partLabel}`}</p>
                               <p className="whitespace-pre-line text-sm">{scheme.answer}</p>
                               {scheme.marksBreakdown && <p className="mt-1 text-xs text-muted-foreground">Barème : {scheme.marksBreakdown}</p>}
                             </div>
@@ -539,7 +539,7 @@ function QuestionsInner() {
                       <div className="mt-3 space-y-3 border-l-2 border-primary/20 pl-4">
                         {question.markSchemes.map((scheme: any) => (
                           <div key={scheme.id ?? `${question.id}-${scheme.partLabel}`}>
-                            <p className="text-sm font-semibold">Partie {scheme.partLabel}</p>
+                            <p className="text-sm font-semibold">{question.type === "QCM" ? "Bonne réponse" : `Partie ${scheme.partLabel}`}</p>
                             <p className="whitespace-pre-line text-sm">{scheme.answer}</p>
                             {scheme.marksBreakdown && <p className="mt-1 text-xs text-muted-foreground">Barème : {scheme.marksBreakdown}</p>}
                           </div>

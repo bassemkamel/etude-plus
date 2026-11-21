@@ -94,7 +94,7 @@ function Player() {
             <div className="mt-6 p-4 rounded-xl bg-green-50 border border-green-200">
               <p className="text-sm font-semibold mb-1">Barème</p>
               {q.markSchemes.map((m) => (
-                <p key={m.id} className="text-sm">{m.partLabel}. {m.answer}</p>
+                <p key={m.id} className="text-sm">{q.type === "QCM" ? `Réponse correcte : ${m.answer}` : `${m.partLabel}. ${m.answer}`}</p>
               ))}
             </div>
           )}
